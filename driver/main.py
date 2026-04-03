@@ -281,6 +281,7 @@ def pass_fd_server(sock_path: str, buffer_id: str):
         
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     server.bind(sock_path)
+    os.chmod(sock_path, 0o777)  # Allow non-root Ray workers to connect
     server.listen(5)
     logger.info(f"FD passing server listening on {sock_path} for buffer {buffer_id}")
     
@@ -386,6 +387,7 @@ def notify_server(sock_path: str, buffer_id: str):
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
         server.bind(sock_path)
+        os.chmod(sock_path, 0o777)  # Allow non-root Ray workers to connect
     except OSError as e:
         logger.error(f"Failed to bind notify server at {sock_path}: {e}")
         return
