@@ -423,6 +423,7 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
 
             if not os.path.exists(SOCKET_DIR):
                 os.makedirs(SOCKET_DIR, exist_ok=True)
+            os.chmod(SOCKET_DIR, 0o777)  # Ensure non-root Ray workers can access sockets
                 
             weight_size_bytes = request.size_bytes
             source_path = request.source_path
