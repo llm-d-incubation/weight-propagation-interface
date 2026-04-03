@@ -1,0 +1,8 @@
+apiVersion: wpi.sig.k8s.io/v1alpha1
+kind: WeightBuffer
+metadata:
+  name: wb-test
+  namespace: wpi-system
+spec:
+  capacity: "10Gi"
+  sourcePath: "/tmp/dummy.safetensors"

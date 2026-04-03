@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: create-dummy
+  namespace: wpi-system
+spec:
+  selector:
+    matchLabels:
+      app: create-dummy
+  template:
+    metadata:
+      labels:
+        app: create-dummy
+    spec:
+      nodeSelector:
+        cloud.google.com/gke-nodepool: a3-ultragpu-8g-a3-ultragpu-pool
+      tolerations:
+      - operator: "Exists"
+      containers:
+      - name: python
+        image: python:3.9-slim
+        command:
+        - python
+        - -c
+        - |
+          import json, struct
+          data = b'\x00\x00' * (1024*1024*10) # 20MB of 0s
+          metadata = {
+              "__metadata__": {"format": "pt"},
+              "weight": {
+                  "dtype": "F16",
+                  "shape": [1024, 1024, 10],
+                  "data_offsets": [0, len(data)]
+              }
+          }
+          meta_bytes = json.dumps(metadata).encode('utf-8')
+          header_len = struct.pack('<Q', len(meta_bytes))
+          with open('/host-tmp/dummy.safetensors', 'wb') as f:
+              f.write(header_len)
+              f.write(meta_bytes)
+              f.write(data)
+          while True:
+              import time
+              time.sleep(60)
+        volumeMounts:
+        - mountPath: /host-tmp
+          name: host-tmp
+      volumes:
+      - name: host-tmp
+        hostPath:
+          path: /tmp
+          type: Directory

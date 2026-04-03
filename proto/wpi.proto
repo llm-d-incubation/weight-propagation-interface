@@ -1,0 +1,117 @@
+syntax = "proto3";
+
+package wpi.v1alpha1;
+
+option go_package = "wpi.sig.k8s.io/operator/pkg/wpi;wpi";
+
+// 2.1 WPI Identity Service
+service IdentityService {
+  rpc GetPluginInfo(GetPluginInfoRequest) returns (GetPluginInfoResponse);
+  rpc GetPluginCapabilities(GetPluginCapabilitiesRequest) returns (GetPluginCapabilitiesResponse);
+}
+
+message GetPluginInfoRequest {}
+
+message GetPluginInfoResponse {
+  string name = 1;
+  string vendor_version = 2;
+}
+
+message GetPluginCapabilitiesRequest {}
+
+message GetPluginCapabilitiesResponse {
+  message PluginCapability {
+    enum Capability {
+        UNKNOWN = 0;
+        CROSS_VENDOR_TRANSFER = 1;
+        ON_THE_FLY_RESHAPING = 2;
+        PRE_STAGING_SUPPORT = 3;
+    }
+    Capability capability = 1;
+  }
+  repeated PluginCapability capabilities = 1;
+}
+
+// 2.2 WPI Controller Service (The "Handshake")
+service ControllerService {
+  rpc CreateWeightBuffer(CreateWeightBufferRequest) returns (CreateWeightBufferResponse);
+  rpc AuthorizeTransfer(AuthorizeTransferRequest) returns (AuthorizeTransferResponse);
+  rpc QueryTopology(QueryTopologyRequest) returns (QueryTopologyResponse);
+}
+
+message CreateWeightBufferRequest {
+  string buffer_id = 1;
+  uint64 size_bytes = 2;
+}
+message CreateWeightBufferResponse {}
+
+message AuthorizeTransferRequest {
+  string buffer_id = 1;
+  string target_node_id = 2;
+}
+message AuthorizeTransferResponse {
+  bytes rkey = 1;
+}
+
+message QueryTopologyRequest {
+  string node_id = 1;
+}
+message QueryTopologyResponse {
+  string topology_info = 1;
+}
+
+// 2.3 WPI Node Service (The "Mover")
+service NodeService {
+  rpc NodeRegisterWeight(NodeRegisterWeightRequest) returns (NodeRegisterWeightResponse);
+  rpc NodeStageWeight(NodeStageWeightRequest) returns (NodeStageWeightResponse);
+  rpc NodeUnstageWeight(NodeUnstageWeightRequest) returns (NodeUnstageWeightResponse);
+  rpc NodePropagate(NodePropagateRequest) returns (NodePropagateResponse);
+  rpc NodeTranslateAndMap(NodeTranslateAndMapRequest) returns (NodeTranslateAndMapResponse);
+}
+
+message NodeRegisterWeightRequest {
+  string buffer_id = 1;
+  uint64 size_bytes = 2;
+}
+message NodeRegisterWeightResponse {
+  string dma_buf_handle = 1;
+}
+
+message NodeStageWeightRequest {
+  string claim_id = 1;
+  string buffer_id = 2;
+  string source_path = 3;
+  uint64 size_bytes = 4;
+}
+message NodeStageWeightResponse {}
+
+message NodeUnstageWeightRequest {
+  string claim_id = 1;
+}
+message NodeUnstageWeightResponse {}
+
+message LayoutDescriptor {
+  enum LayoutType {
+    ROW_MAJOR = 0;
+    COLUMN_MAJOR = 1;
+    VENDOR_SPECIFIC_TILING = 2;
+  }
+  LayoutType type = 1;
+  bytes tiling_metadata = 2; // Opaque blob for vendor-specific tiling logic
+}
+
+message NodePropagateRequest {
+  string buffer_id = 1;
+  repeated string target_node_ids = 2;
+  LayoutDescriptor target_layout = 3;
+}
+message NodePropagateResponse {}
+
+message NodeTranslateAndMapRequest {
+  string claim_id = 1;
+  LayoutDescriptor source_layout = 2;
+  LayoutDescriptor target_layout = 3;
+}
+message NodeTranslateAndMapResponse {
+  string device_path = 1; // e.g., /dev/wpi/weights/layer82
+}

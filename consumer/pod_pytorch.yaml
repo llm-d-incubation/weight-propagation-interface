@@ -1,0 +1,52 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pytorch-consumer
+  namespace: wpi-system
+  labels:
+    app: pytorch-consumer
+spec:
+  nodeSelector:
+    cloud.google.com/gke-nodepool: l4-pool
+  tolerations:
+  - operator: "Exists"
+  resourceClaims:
+  - name: my-claim
+    resourceClaimName: wc-test
+  containers:
+  - name: consumer
+    image: pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
+    command: ["python", "-u", "/app/consumer_pytorch.py"]
+    env:
+    - name: NVIDIA_VISIBLE_DEVICES
+      value: "all"
+    securityContext:
+      privileged: true
+    resources:
+      claims:
+      - name: my-claim
+    volumeMounts:
+    - name: wpi-sockets
+      mountPath: /run/wpi/sockets
+    - name: app-code
+      mountPath: /app
+    - name: nvidia-lib
+      mountPath: /usr/local/nvidia/lib64
+    - name: host-dev
+      mountPath: /dev
+  volumes:
+  - name: wpi-sockets
+    hostPath:
+      path: /run/wpi/sockets
+      type: DirectoryOrCreate
+  - name: app-code
+    configMap:
+      name: pytorch-consumer-code
+  - name: nvidia-lib
+    hostPath:
+      path: /home/kubernetes/bin/nvidia/lib64
+      type: Directory
+  - name: host-dev
+    hostPath:
+      path: /dev
+      type: Directory

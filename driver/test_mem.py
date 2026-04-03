@@ -1,0 +1,12 @@
+import ctypes
+libcuda = ctypes.CDLL("/usr/local/nvidia/lib64/libcuda.so.1")
+libcuda.cuInit(0)
+dev = ctypes.c_int()
+libcuda.cuDeviceGet(ctypes.byref(dev), 0)
+ctx = ctypes.c_void_p()
+libcuda.cuCtxCreate_v2(ctypes.byref(ctx), 0, dev)
+free = ctypes.c_size_t()
+total = ctypes.c_size_t()
+libcuda.cuMemGetInfo_v2(ctypes.byref(free), ctypes.byref(total))
+print(f"Free: {free.value / (1024**3):.2f} GB")
+print(f"Total: {total.value / (1024**3):.2f} GB")

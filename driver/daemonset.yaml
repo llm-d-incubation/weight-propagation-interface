@@ -1,0 +1,144 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wpi-driver
+  namespace: wpi-system
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: wpi-driver
+  namespace: wpi-system
+  labels:
+    app: wpi-driver
+spec:
+  selector:
+    matchLabels:
+      app: wpi-driver
+  template:
+    metadata:
+      labels:
+        app: wpi-driver
+    spec:
+      hostNetwork: true
+      serviceAccountName: wpi-driver
+      nodeSelector:
+        cloud.google.com/gke-nodepool: a3-ultragpu-8g-a3-ultragpu-pool
+      tolerations:
+      - operator: "Exists"
+      containers:
+      - name: wpi-driver
+        image: us-west1-docker.pkg.dev/gke-shared-ai-dev/rl-weight-transfer/wpi-driver:latest
+        imagePullPolicy: IfNotPresent
+        command: ["/bin/sh", "-c", "apt-get update && apt-get install -y libnl-route-3-200 libnl-3-200 && cd /app && exec python main.py"]
+        securityContext:
+          privileged: true
+        env:
+        - name: NVIDIA_VISIBLE_DEVICES
+          value: "all"
+        - name: NCCL_CROSS_NIC
+          value: "0"
+        - name: NCCL_NET_GDR_LEVEL
+          value: "PIX"
+        - name: NCCL_P2P_NET_CHUNKSIZE
+          value: "131072"
+        - name: NCCL_NVLS_CHUNKSIZE
+          value: "524288"
+        - name: NCCL_IB_ADAPTIVE_ROUTING
+          value: "1"
+        - name: NCCL_IB_QPS_PER_CONNECTION
+          value: "4"
+        - name: NCCL_IB_TC
+          value: "52"
+        - name: NCCL_IB_FIFO_TC
+          value: "84"
+        - name: NCCL_TUNER_PLUGIN
+          value: "none"
+        - name: NCCL_PROFILER_PLUGIN
+          value: "none"
+        - name: NCCL_PROFILER_DISABLE
+          value: "1"
+        - name: NCCL_SHIMNET_GUEST_CONFIG_CHECKER_CONFIG_FILE
+          value: "/usr/local/nvidia/gib/configs/guest_config.txtpb"
+        - name: NCCL_DEBUG
+          value: "INFO"
+        - name: LD_LIBRARY_PATH
+          value: "/usr/local/nvidia/lib64:/usr/local/lib/python3.11/site-packages/nvidia/nccl/lib"
+        ports:
+        - containerPort: 50051
+          name: grpc
+        volumeMounts:
+        - name: weight-memory
+          mountPath: /tmp
+        - name: gib-configs
+          mountPath: /usr/local/nvidia/gib
+        - name: wpi-sockets
+          mountPath: /run/wpi/sockets
+        - name: nvidia-lib
+          mountPath: /usr/local/nvidia/lib64
+        - name: host-dev
+          mountPath: /dev
+        - name: wpi-code-vol
+          mountPath: /app/main.py
+          subPath: main.py
+        - name: wpi-code-vol
+          mountPath: /app/wpi_pb2.py
+          subPath: wpi_pb2.py
+        - name: wpi-code-vol
+          mountPath: /app/wpi_pb2_grpc.py
+          subPath: wpi_pb2_grpc.py
+      - name: dra-plugin
+        image: us-west1-docker.pkg.dev/gke-shared-ai-dev/rl-weight-transfer/wpi-driver:latest
+        imagePullPolicy: IfNotPresent
+        command: ["/var/lib/kubelet/plugins/dra-plugin-new"]
+        env:
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        securityContext:
+          privileged: true
+        volumeMounts:
+        - name: kubelet-plugins
+          mountPath: /var/lib/kubelet/plugins
+        - name: kubelet-plugins-registry
+          mountPath: /var/lib/kubelet/plugins_registry
+        - name: wpi-sockets
+          mountPath: /run/wpi/sockets
+      volumes:
+      - name: weight-memory
+        hostPath:
+          path: /tmp
+          type: DirectoryOrCreate
+      - name: gib-configs
+        hostPath:
+          path: /home/kubernetes/bin/gib
+          type: DirectoryOrCreate
+      - name: wpi-sockets
+        hostPath:
+          path: /run/wpi/sockets
+          type: DirectoryOrCreate
+      - name: kubelet-plugins
+        hostPath:
+          path: /var/lib/kubelet/plugins
+          type: DirectoryOrCreate
+      - name: kubelet-plugins-registry
+        hostPath:
+          path: /var/lib/kubelet/plugins_registry
+          type: DirectoryOrCreate
+      - name: nvidia-lib
+        hostPath:
+          path: /home/kubernetes/bin/nvidia/lib64
+          type: DirectoryOrCreate
+      - name: host-dev
+        hostPath:
+          path: /dev
+          type: Directory
+      - name: wpi-code-vol
+        configMap:
+          name: wpi-code
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wpi-system

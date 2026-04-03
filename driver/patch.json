@@ -1,0 +1,38 @@
+{
+  "spec": {
+    "template": {
+      "spec": {
+        "volumes": [
+          {
+            "name": "wpi-code-vol",
+            "configMap": {
+              "name": "wpi-code"
+            }
+          }
+        ],
+        "containers": [
+          {
+            "name": "wpi-driver",
+            "volumeMounts": [
+              {
+                "name": "wpi-code-vol",
+                "mountPath": "/app/main.py",
+                "subPath": "main.py"
+              },
+              {
+                "name": "wpi-code-vol",
+                "mountPath": "/app/wpi_pb2.py",
+                "subPath": "wpi_pb2.py"
+              },
+              {
+                "name": "wpi-code-vol",
+                "mountPath": "/app/wpi_pb2_grpc.py",
+                "subPath": "wpi_pb2_grpc.py"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

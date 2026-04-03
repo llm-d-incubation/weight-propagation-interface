@@ -1,0 +1,21 @@
+apiVersion: resource.k8s.io/v1
+kind: DeviceClass
+metadata:
+  name: wpi-device-class
+spec:
+  selectors:
+  - cel:
+      expression: 'device.driver == "wpi.sig.k8s.io"'
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaim
+metadata:
+  name: wc-test
+  namespace: wpi-system
+spec:
+  devices:
+    requests:
+    - name: wpi-req
+      exactly:
+        deviceClassName: wpi-class
+

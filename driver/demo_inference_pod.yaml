@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: demo-inference-sampler
+  namespace: wpi-system
+spec:
+  nodeSelector:
+    cloud.google.com/gke-nodepool: a3-ultragpu-8g-a3-ultragpu-pool
+  tolerations:
+  - key: "nvidia.com/gpu"
+    operator: "Exists"
+    effect: "NoSchedule"
+  containers:
+  - name: vllm-engine
+    image: vllm/vllm-openai:latest
+    imagePullPolicy: IfNotPresent
+    command: ["sleep", "infinity"] # Keeping it simple for the demo
+    resources:
+      claims:
+      - name: wpi-weight
+    # Example integration point: The Pod accesses the WPI socket
+    volumeMounts:
+    - name: wpi-sockets
+      mountPath: /run/wpi/sockets
+  # Dynamic Resource Allocation (DRA) Integration
+  resourceClaims:
+  - name: wpi-weight
+    resourceClaimName: demo-weight-claim
+  volumes:
+  - name: wpi-sockets
+    hostPath:
+      path: /run/wpi/sockets
+      type: DirectoryOrCreate

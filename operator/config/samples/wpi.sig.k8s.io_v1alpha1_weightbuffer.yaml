@@ -1,0 +1,9 @@
+apiVersion: wpi.sig.k8s.io/v1alpha1
+kind: WeightBuffer
+metadata:
+  labels:
+    app.kubernetes.io/name: operator
+    app.kubernetes.io/managed-by: kustomize
+  name: weightbuffer-sample
+spec:
+  capacity: "10Gi"
