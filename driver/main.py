@@ -207,19 +207,24 @@ def handle_target_connection(conn, addr):
         conn.sendall(b"OK\n")
         
         if CUPY_AVAILABLE and cuda_allocator:
-            cuda_allocator.libcuda.cuCtxSetCurrent(cuda_allocator.ctx)
             logger.info(f"Target initializing NCCL comm...")
             
             num_elements = size_bytes // 2 # float16
             
-            comm = cupy.cuda.nccl.NcclCommunicator(world_size, nccl_id_bytes, rank)
-            logger.info(f"Target NCCL comm initialized (Rank {rank}/{world_size}). Starting bcast recv...")
+            # Wrap VMM device_ptr through cupy's memory management
+            # so NCCL can properly handle the pointer
+            mem = cupy.cuda.UnownedMemory(device_ptr, size_bytes, None)
+            memptr = cupy.cuda.MemoryPointer(mem, 0)
             
-            start_time = time.time()
-            # bcast: buffer, count, datatype, root, stream
-            comm.bcast(device_ptr, num_elements, cupy.cuda.nccl.NCCL_FLOAT16, 0, 0)
-            
-            cupy.cuda.Device(cuda_allocator.device.value).synchronize()
+            with cupy.cuda.Device(cuda_allocator.device.value):
+                comm = cupy.cuda.nccl.NcclCommunicator(world_size, nccl_id_bytes, rank)
+                logger.info(f"Target NCCL comm initialized (Rank {rank}/{world_size}). Starting bcast recv...")
+                
+                start_time = time.time()
+                # bcast: buffer, count, datatype, root, stream
+                comm.bcast(memptr.ptr, num_elements, cupy.cuda.nccl.NCCL_FLOAT16, 0, 0)
+                
+                cupy.cuda.Device(cuda_allocator.device.value).synchronize()
             try:
                 comm.destroy()
             except AttributeError:
@@ -624,14 +629,19 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
                 sockets.append(s)
                 
             logger.info(f"Source (Rank 0) initializing NCCL comm...")
-            cuda_allocator.libcuda.cuCtxSetCurrent(cuda_allocator.ctx)
             
-            comm = cupy.cuda.nccl.NcclCommunicator(world_size, nccl_id_bytes, 0)
-            logger.info(f"Source NCCL comm initialized (Rank 0/{world_size}). Starting bcast send...")
+            # Wrap VMM device_ptr through cupy's memory management
+            # so NCCL can properly handle the pointer
+            mem = cupy.cuda.UnownedMemory(device_ptr, size_bytes, None)
+            memptr = cupy.cuda.MemoryPointer(mem, 0)
             
-            start_time = time.time()
-            comm.bcast(device_ptr, num_elements, cupy.cuda.nccl.NCCL_FLOAT16, 0, 0)
-            cupy.cuda.Device(cuda_allocator.device.value).synchronize()
+            with cupy.cuda.Device(cuda_allocator.device.value):
+                comm = cupy.cuda.nccl.NcclCommunicator(world_size, nccl_id_bytes, 0)
+                logger.info(f"Source NCCL comm initialized (Rank 0/{world_size}). Starting bcast send...")
+                
+                start_time = time.time()
+                comm.bcast(memptr.ptr, num_elements, cupy.cuda.nccl.NCCL_FLOAT16, 0, 0)
+                cupy.cuda.Device(cuda_allocator.device.value).synchronize()
             try:
                 comm.destroy()
             except AttributeError:
@@ -645,6 +655,24 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
             
             for s in sockets:
                 s.close()
+            
+            # Send READY to local consumers on the SOURCE node.
+            # When rollout workers are co-located with the trainer, they
+            # share the same VMM buffer (same FD from same driver). The data
+            # is already there after send_weights() packs it. They just need
+            # the READY signal to proceed.
+            notify_sockets = info.get("notify_sockets", [])
+            broken_sockets = []
+            for s in notify_sockets:
+                try:
+                    s.sendall(b"READY\n")
+                    logger.info("Source: Sent READY notification to a local consumer.")
+                except Exception as e:
+                    logger.warning(f"Source: Failed to notify a local consumer: {e}")
+                    broken_sockets.append(s)
+            for s in broken_sockets:
+                if s in notify_sockets:
+                    notify_sockets.remove(s)
             
             return wpi_pb2.NodePropagateResponse()
             
