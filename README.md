@@ -4,6 +4,10 @@ The **Weight Propagation Interface (WPI)** is a Kubernetes-native orchestration 
 
 As models grow to hundreds of billions of parameters, the traditional path of saving weights to shared storage and independently downloading them into GPU RAM becomes a severe bottleneck. WPI solves this by treating Model Weights as first-class scheduling and hardware resources, leveraging native hardware interconnects (like NVLink and InfiniBand via NCCL) to securely and efficiently distribute weights directly into accelerator memory.
 
+## 📺 Demo
+
+Check out the [WPI Demo Video](https://youtu.be/I3bRaShPILE) to see the system in action!
+
 ## 🏗️ Architecture
 
 WPI consists of three main architectural layers:
