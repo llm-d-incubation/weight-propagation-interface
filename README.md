@@ -25,6 +25,12 @@ WPI consists of three main architectural layers:
 - `crds/`: Kubernetes Custom Resource manifests.
 - `consumer/`: Example workloads and pod specifications demonstrating WPI integration.
 
+## 🔌 Integrations
+
+WPI seamlessly integrates with distributed ML training frameworks to eliminate storage bottlenecks during off-policy training weight synchronization:
+
+- [**verl**](consumer/wpi_verl_plugin/README.md): WPI is fully integrated as a `CheckpointEngine` backend for `verl`. This enables high-throughput, zero-copy weight propagation from RL trainers to rollout workers over RDMA.
+
 ## 🚀 Getting Started
 
 Check out the following documents for more details:
