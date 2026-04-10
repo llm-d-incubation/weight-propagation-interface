@@ -1,7 +1,7 @@
 apiVersion: wpi.sig.k8s.io/v1alpha1
 kind: WeightBuffer
 metadata:
-  name: wb-test
+  name: verl-weight-buffer
   namespace: wpi-system
 spec:
   capacity: "60Gi"

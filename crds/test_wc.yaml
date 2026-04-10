@@ -1,7 +1,7 @@
 apiVersion: wpi.sig.k8s.io/v1alpha1
 kind: WeightClaim
 metadata:
-  name: wc-test
+  name: verl-weight-claim
   namespace: wpi-system
 spec:
-  weightBufferName: "wb-test"
+  weightBufferName: "verl-weight-buffer"

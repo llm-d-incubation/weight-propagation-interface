@@ -562,7 +562,19 @@ class WPIClient:
             raise TimeoutError(f"WPI notify socket {notify_path} not found after {timeout}s")
 
         self._notify_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self._notify_socket.connect(notify_path)
+        
+        max_connect_retries = 30
+        for attempt in range(max_connect_retries):
+            try:
+                self._notify_socket.connect(notify_path)
+                break
+            except (ConnectionRefusedError, PermissionError, OSError) as e:
+                if attempt == max_connect_retries - 1:
+                    raise
+                time.sleep(1)
+                if attempt % 5 == 4:
+                    logger.debug(f"WPI: Retrying notify socket connect to {notify_path} ({attempt + 1}/{max_connect_retries}): {e}")
+
         logger.info(f"WPI: Connected to notify socket for buffer '{buffer_id}'")
 
     def wait_for_ready(self, timeout: float = 300.0):

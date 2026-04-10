@@ -23,12 +23,12 @@ spec:
       hostNetwork: true
       serviceAccountName: wpi-driver
       nodeSelector:
-        cloud.google.com/gke-nodepool: a3-ultragpu-8g-a3-ultragpu-pool
+        cloud.google.com/gke-nodepool: a4-pool
       tolerations:
       - operator: "Exists"
       containers:
       - name: wpi-driver
-        image: us-west1-docker.pkg.dev/gke-shared-ai-dev/rl-weight-transfer/wpi-driver:latest
+        image: us-central1-docker.pkg.dev/yangspirit-gke-dev/rl-weight-transfer/wpi-driver:latest
         imagePullPolicy: IfNotPresent
         command: ["/bin/sh", "-c", "apt-get update && apt-get install -y libnl-route-3-200 libnl-3-200 && cd /app && exec python main.py"]
         securityContext:
@@ -88,9 +88,9 @@ spec:
           mountPath: /app/wpi_pb2_grpc.py
           subPath: wpi_pb2_grpc.py
       - name: dra-plugin
-        image: us-west1-docker.pkg.dev/gke-shared-ai-dev/rl-weight-transfer/wpi-driver:latest
+        image: us-central1-docker.pkg.dev/yangspirit-gke-dev/rl-weight-transfer/wpi-driver:latest
         imagePullPolicy: IfNotPresent
-        command: ["/var/lib/kubelet/plugins/dra-plugin-new"]
+        command: ["/usr/local/bin/dra-plugin"]
         env:
         - name: NODE_NAME
           valueFrom:
