@@ -157,8 +157,64 @@ MOUNT_PATH = "/dev/wpi/weights"
 SOCKET_DIR = "/run/wpi/sockets"
 FILE_SIZE_GIB = 10
 
+# Pre-update signal timeout: how long to wait for consumer ACKs
+PRE_UPDATE_ACK_TIMEOUT = 30  # seconds
+
 ALLOCATED_BUFFERS = {}  # mapping: buffer_id -> {"device_ptr": device_ptr, "size_bytes": size_bytes, "ref_count": int}
 KNOWN_CLAIMS = {}       # mapping: claim_id -> buffer_id
+
+
+def send_pre_update_signal(buffer_id: str) -> bool:
+    """Send UPDATING signal to all consumers and wait for ACKs.
+
+    This gives consumers time to:
+    - Drain in-flight requests
+    - Flush KV cache (stale after weight update)
+    - Pause request acceptance
+
+    Returns True if all consumers acknowledged, False on timeout/error.
+    """
+    if buffer_id not in ALLOCATED_BUFFERS:
+        return True
+
+    info = ALLOCATED_BUFFERS[buffer_id]
+    notify_sockets = info.get("notify_sockets", [])
+    if not notify_sockets:
+        logger.info(f"No consumers connected for {buffer_id}, skipping pre-update signal.")
+        return True
+
+    logger.info(f"Sending UPDATING signal to {len(notify_sockets)} consumer(s) for {buffer_id}...")
+    broken_sockets = []
+    waiting_sockets = []
+
+    for s in notify_sockets:
+        try:
+            s.sendall(b"UPDATING\n")
+            waiting_sockets.append(s)
+        except Exception as e:
+            logger.warning(f"Failed to send UPDATING to a consumer: {e}")
+            broken_sockets.append(s)
+
+    # Wait for ACKs from all consumers
+    for s in waiting_sockets:
+        try:
+            s.settimeout(PRE_UPDATE_ACK_TIMEOUT)
+            ack = s.recv(64)
+            if b"ACK" in ack:
+                logger.debug("Received ACK from consumer.")
+            else:
+                logger.warning(f"Unexpected pre-update response from consumer: {ack}")
+        except Exception as e:
+            logger.warning(f"Consumer did not ACK pre-update signal within timeout: {e}")
+            # Continue anyway — don't block the weight update on a slow consumer
+
+    # Clean up broken sockets
+    for s in broken_sockets:
+        if s in notify_sockets:
+            notify_sockets.remove(s)
+
+    logger.info(f"Pre-update signaling complete for {buffer_id}. Proceeding with weight update.")
+    return True
 
 def start_nccl_target_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -203,6 +259,9 @@ def handle_target_connection(conn, addr):
         info = ALLOCATED_BUFFERS[buffer_id]
         device_ptr = info["device_ptr"]
         size_bytes = info["size_bytes"]
+        
+        # Send pre-update signal to local consumers BEFORE receiving new weights
+        send_pre_update_signal(buffer_id)
         
         conn.sendall(b"OK\n")
         
@@ -603,6 +662,12 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
             device_ptr = info["device_ptr"]
             size_bytes = info["size_bytes"]
             num_elements = size_bytes // 2
+            
+            # Phase 1: Pre-update signal to LOCAL consumers on source node.
+            # Source node consumers share the same VRAM buffer, so they need
+            # to know weights are about to change (e.g., flush KV cache).
+            # Target nodes get their signal in handle_target_connection().
+            send_pre_update_signal(request.buffer_id)
             
             nccl_id_bytes = cupy.cuda.nccl.get_unique_id()
             

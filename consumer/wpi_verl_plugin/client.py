@@ -127,6 +127,10 @@ class WPIClient:
     Handles gRPC calls to the WPI driver, UNIX socket FD passing for
     CUDA memory sharing, and notification synchronization.
 
+    Supports two-phase weight update protocol:
+    1. Driver sends UPDATING → consumer flushes KV cache, drains requests
+    2. Driver sends READY → consumer resumes with new weights
+
     Args:
         socket_dir: Path to the directory containing WPI UNIX sockets.
             The WPI driver creates sockets here. Defaults to /run/wpi/sockets.
@@ -149,6 +153,7 @@ class WPIClient:
         self._libcuda: Optional[ctypes.CDLL] = None
         self._cuda_ctx = None
         self._cuda_device = None
+        self._pre_update_callback = None
 
     def _get_grpc_stub(self):
         """Lazily create gRPC channel and stub for NodeService."""
@@ -577,10 +582,39 @@ class WPIClient:
 
         logger.info(f"WPI: Connected to notify socket for buffer '{buffer_id}'")
 
+    def register_pre_update_callback(self, callback):
+        """Register a callback invoked when the driver signals a weight update is imminent.
+
+        The callback should perform any necessary cleanup before weights change:
+        - Flush KV cache (KV computed with old weights becomes stale)
+        - Drain in-flight inference requests
+        - Pause request acceptance
+
+        The callback receives no arguments and should return promptly (< 30s).
+        After the callback returns, an ACK is sent to the driver allowing
+        the weight update to proceed.
+
+        Example (vLLM integration)::
+
+            def on_weight_update():
+                engine.flush_kv_cache()
+                engine.pause_serving()
+
+            wpi_client.register_pre_update_callback(on_weight_update)
+
+        Args:
+            callback: A callable with no arguments.
+        """
+        self._pre_update_callback = callback
+        logger.info("WPI: Registered pre-update callback")
+
     def wait_for_ready(self, timeout: float = 300.0):
         """Block until a READY notification is received from the WPI driver.
 
-        Called by receive_weights() to synchronize with NodePropagate.
+        Handles the two-phase weight update protocol:
+        1. If an UPDATING signal arrives first, invokes the pre_update_callback
+           (if registered), sends ACK, then continues waiting for READY.
+        2. When READY arrives, returns so the caller can proceed with new weights.
 
         Args:
             timeout: Maximum time to wait for READY signal in seconds.
@@ -592,14 +626,44 @@ class WPIClient:
             raise RuntimeError("WPI: Notify socket not connected. Call connect_notify_socket() first.")
 
         self._notify_socket.settimeout(timeout)
-        try:
-            data = self._notify_socket.recv(1024)
+        start = time.time()
+
+        while True:
+            remaining = timeout - (time.time() - start)
+            if remaining <= 0:
+                raise TimeoutError(f"WPI: Did not receive READY notification within {timeout}s")
+
+            self._notify_socket.settimeout(remaining)
+            try:
+                data = self._notify_socket.recv(1024)
+            except TimeoutError:
+                raise TimeoutError(f"WPI: Did not receive READY notification within {timeout}s") from None
+
+            if b"UPDATING" in data:
+                logger.info("WPI: Received UPDATING signal — weight update imminent")
+
+                # Invoke callback so consumer can flush KV cache, drain requests, etc.
+                if self._pre_update_callback is not None:
+                    try:
+                        self._pre_update_callback()
+                        logger.info("WPI: Pre-update callback completed")
+                    except Exception as e:
+                        logger.error(f"WPI: Pre-update callback failed: {e}")
+
+                # ACK back to driver so it can proceed with the NCCL broadcast
+                try:
+                    self._notify_socket.sendall(b"ACK\n")
+                except Exception as e:
+                    logger.warning(f"WPI: Failed to send ACK: {e}")
+
+                # Continue waiting for the READY signal
+                continue
+
             if b"READY" in data:
-                logger.info("WPI: Received READY notification from driver")
-            else:
-                logger.warning(f"WPI: Unexpected notification data: {data}")
-        except TimeoutError:
-            raise TimeoutError(f"WPI: Did not receive READY notification within {timeout}s") from None
+                logger.info("WPI: Received READY notification — weights updated")
+                return
+
+            logger.warning(f"WPI: Unexpected notification data: {data}")
 
     def close(self):
         """Clean up connections."""
