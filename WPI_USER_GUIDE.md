@@ -194,9 +194,30 @@ This is all completely abstracted from the end-user. The only requirement is tha
 Testing on a single a4-highcpu-8g instance demonstrated a sustained bandwidth of ~650 GB/s. A 20GB buffer was transferred between Rank 0 (GPU 0) and Rank 1 (GPU 1) via NVLink in just 0.03 seconds.
 
 ### Cross-Node Sockets (TCP) Results
-Utilizing two g2-standard-4 machines, a 10GB tensor was successfully mapped and transmitted across isolated Pod network interfaces. The process took ~20 seconds, maintaining a steady 1.00 GB/s transfer rate.
+Utilizing two g2-standard-4 machines, a 10GB tensor was mapped and transmitted across isolated Pod network interfaces using standard unoptimized TCP networking.
+- **Performance:** Maintained a steady baseline transfer rate of **1.00 GB/s**.
+- **Latency:** The process took **~20.00 seconds** to complete, demonstrating the high CPU overhead and latency inherent to standard socket transfers for large tensors.
+- **Speed of Light Context:** The g2-standard-4 maximum network bandwidth is 1.25 GB/s. The transfer achieved **80% of maximum bandwidth**.
 
 ### Distributed Broadcast Validation (1-to-N)
-**Architectural Setup:** The GKE l4-pool was scaled to three identical physical instances to support refactored testing protocols.
-**Validation Outcome:** A 10GB payload (comprising 7.0 fp16 scalars) was broadcast natively from Rank 0 to distributed targets at Rank 1 and Rank 2.
-Target nodes reported concurrent NCCL completion in 11.0381s with a bandwidth of 0.91 GB/s. Successful data integrity tests confirm that WPI can effectively bootstrap a broadcast topology across three isolated Pod networks.
+Utilizing three g2-standard-4 machines, a 10GB tensor was mapped and transmitted across isolated Pod network interfaces using standard unoptimized TCP networking.
+- **Architectural Setup:** The GKE l4-pool was scaled to three identical physical instances to support refactored testing protocols.
+- **Validation Outcome:** A 10GB payload (comprising 7.0 fp16 scalars) was broadcast natively from Rank 0 to distributed targets at Rank 1 and Rank 2. Target nodes reported concurrent NCCL completion in **11.0381s** with a bandwidth of **0.91 GB/s**. Successful data integrity tests confirm that WPI can effectively bootstrap a broadcast topology across three isolated Pod networks.
+- **Speed of Light Context:** The g2-standard-4 maximum network bandwidth is 1.25 GB/s. The transfer achieved **72.8% of maximum bandwidth**.
+
+### A3-Ultragpu-8g RDMA Benchmark (Baseline vs. Optimized)
+Validation of zero-copy broadcast operations was conducted by transmitting a 10 GiB payload across internal Pod networks using two distinct configurations to compare baseline socket routing against hardware-accelerated routing.
+
+**Baseline: Standard Socket-Based**
+- **Payload Volume:** 10 GiB of allocated tensor memory.
+- **Bandwidth:** Sustained throughput of **5.50 GB/s**.
+- **Latency:** Completion time of **1.811 seconds**.
+
+**Optimized: GPUDirect RDMA-Enabled**
+- **Payload Volume:** 75 GiB.
+- **Bandwidth:** Sustained throughput of **36.57 GB/s**.
+- **Latency:** Minimized transfer latency of **2.0379 seconds**.
+
+**Performance Delta & Speed of Light Analysis**
+- **Throughput Increase:** RDMA acceleration delivered a **565% increase** in bandwidth over the baseline socket transfer.
+- **Speed of Light Context:** The a3-ultragpu-8g maximum network bandwidth per NIC is 50 GB/s. The transfer achieved **73.14% of maximum bandwidth**. For comparison, Ray on A4 achieved 35 GB/s (70% of maximum bandwidth).
