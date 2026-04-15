@@ -32,3 +32,70 @@ spec:
                   type: string
                 retentionPolicy:
                   type: string
+                sharding:
+                  type: object
+                  properties:
+                    strategy:
+                      type: string
+                      enum:
+                        - TensorParallel
+                        - ExpertParallel
+                        - PipelineParallel
+                        - Custom
+                    numShards:
+                      type: integer
+                      minimum: 1
+                    shardFiles:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          index:
+                            type: integer
+                          path:
+                            type: string
+                          sizeBytes:
+                            type: integer
+                            format: int64
+                        required:
+                          - index
+                          - path
+                    filePattern:
+                      type: string
+                  required:
+                    - strategy
+                    - numShards
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                totalShards:
+                  type: integer
+                discoveredShards:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      index:
+                        type: integer
+                      path:
+                        type: string
+                      sizeBytes:
+                        type: integer
+                        format: int64
+

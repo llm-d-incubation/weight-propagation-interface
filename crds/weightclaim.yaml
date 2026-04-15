@@ -28,3 +28,28 @@ spec:
                   type: string
                 targetLayout:
                   type: string
+                shardIndex:
+                  type: integer
+                  minimum: 0
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                assignedShardIndex:
+                  type: integer
+

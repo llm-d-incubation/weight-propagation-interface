@@ -28,6 +28,11 @@ type WeightClaimSpec struct {
 	// WeightBufferName is the name of the WeightBuffer this claim refers to.
 	// +required
 	WeightBufferName string `json:"weightBufferName"`
+	// ShardIndex specifies which shard of a sharded WeightBuffer this claim
+	// is requesting. If the WeightBuffer has sharding and this is not set,
+	// the operator auto-assigns based on the pod's rank annotation.
+	// +optional
+	ShardIndex *int `json:"shardIndex,omitempty"`
 }
 
 // WeightClaimStatus defines the observed state of WeightClaim.
@@ -37,6 +42,10 @@ type WeightClaimStatus struct {
 	// +listMapKey=type
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// AssignedShardIndex is the operator-resolved shard index for this claim.
+	// Set after validation, whether from explicit spec or auto-assignment.
+	// +optional
+	AssignedShardIndex *int `json:"assignedShardIndex,omitempty"`
 }
 
 // +kubebuilder:object:root=true
