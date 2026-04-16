@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -73,6 +74,26 @@ func (r *WeightClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		} else {
 			log.Error(err, "unable to fetch WeightBuffer")
 			return ctrl.Result{}, err
+		}
+	}
+
+	// --- Shard Validation & Assignment ---
+	if validatedStatus == metav1.ConditionTrue && weightBuffer.Spec.Sharding != nil {
+		shardResult := r.resolveShardIndex(&weightClaim, &weightBuffer)
+		if shardResult.err != nil {
+			validatedStatus = metav1.ConditionFalse
+			reason = "ShardValidationFailed"
+			message = shardResult.err.Error()
+		} else {
+			weightClaim.Status.AssignedShardIndex = &shardResult.index
+			message = fmt.Sprintf("Validated. Assigned shard %d of %d (path: %s, size: %d bytes)",
+				shardResult.index, weightBuffer.Status.TotalShards,
+				shardResult.path, shardResult.sizeBytes)
+			log.Info("Shard assigned to claim",
+				"claim", weightClaim.Name,
+				"shardIndex", shardResult.index,
+				"shardPath", shardResult.path,
+				"shardSize", shardResult.sizeBytes)
 		}
 	}
 
@@ -148,6 +169,80 @@ func (r *WeightClaimReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	return ctrl.Result{}, nil
 }
 
+// shardResolution contains the resolved shard metadata for a claim.
+type shardResolution struct {
+	index     int
+	path      string
+	sizeBytes int64
+	err       error
+}
+
+// resolveShardIndex determines which shard this claim should be assigned to.
+// It uses the explicit ShardIndex from the claim spec if set, otherwise
+// falls back to auto-assignment from the claim's name suffix (for JobSet
+// compatibility) or returns an error.
+func (r *WeightClaimReconciler) resolveShardIndex(
+	claim *wpisigk8siov1alpha1.WeightClaim,
+	buffer *wpisigk8siov1alpha1.WeightBuffer,
+) shardResolution {
+	totalShards := buffer.Status.TotalShards
+	if totalShards <= 0 {
+		return shardResolution{err: fmt.Errorf("WeightBuffer sharding not yet discovered (totalShards=0)")}
+	}
+
+	// Determine shard index
+	var shardIndex int
+	if claim.Spec.ShardIndex != nil {
+		shardIndex = *claim.Spec.ShardIndex
+	} else {
+		// Auto-assignment: try to extract index from pod rank annotations.
+		// Check common rank annotations from Job frameworks.
+		rankAnnotations := []string{
+			"wpi.sig.k8s.io/shard-index",           // WPI-specific annotation
+			"batch.kubernetes.io/job-completion-index", // K8s Job indexed completions
+			"ray.io/rank",                             // Ray
+		}
+		found := false
+		for _, annotation := range rankAnnotations {
+			if val, ok := claim.Annotations[annotation]; ok {
+				var idx int
+				if _, err := fmt.Sscanf(val, "%d", &idx); err == nil {
+					shardIndex = idx
+					found = true
+					break
+				}
+			}
+		}
+		if !found {
+			return shardResolution{err: fmt.Errorf(
+				"shardIndex not specified and no rank annotation found on claim %q; "+
+					"set spec.shardIndex or add annotation wpi.sig.k8s.io/shard-index",
+				claim.Name)}
+		}
+	}
+
+	// Validate range
+	if shardIndex < 0 || shardIndex >= totalShards {
+		return shardResolution{err: fmt.Errorf("shardIndex %d out of range [0, %d)", shardIndex, totalShards)}
+	}
+
+	// Look up resolved shard metadata
+	if shardIndex < len(buffer.Status.DiscoveredShards) {
+		shard := buffer.Status.DiscoveredShards[shardIndex]
+		return shardResolution{
+			index:     shardIndex,
+			path:      shard.Path,
+			sizeBytes: shard.SizeBytes,
+		}
+	}
+
+	// Fallback: shard metadata not yet populated
+	return shardResolution{
+		index: shardIndex,
+		path:  buffer.Spec.SourcePath,
+	}
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *WeightClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
@@ -156,3 +251,4 @@ func (r *WeightClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("weightclaim").
 		Complete(r)
 }
+

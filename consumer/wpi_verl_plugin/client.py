@@ -194,6 +194,8 @@ class WPIClient:
         size_bytes: int,
         claim_id: str,
         source_path: str = "",
+        shard_index: int = -1,
+        total_shards: int = 0,
     ):
         """Call NodeStageWeight to allocate a VRAM buffer on the WPI driver.
 
@@ -202,6 +204,8 @@ class WPIClient:
             size_bytes: Size of the VRAM buffer to allocate in bytes.
             claim_id: Kubernetes WeightClaim ID for lifecycle tracking.
             source_path: Optional path to safetensors file for pre-loading.
+            shard_index: Shard index for sharded buffers (-1 = unsharded).
+            total_shards: Total number of shards (0 = unsharded).
         """
         from wpi_verl_plugin.proto import wpi_pb2
 
@@ -211,6 +215,8 @@ class WPIClient:
             buffer_id=buffer_id,
             source_path=source_path,
             size_bytes=size_bytes,
+            shard_index=shard_index,
+            total_shards=total_shards,
         )
         try:
             stub.NodeStageWeight(request)
@@ -229,28 +235,49 @@ class WPIClient:
                 )
             else:
                 raise
-        logger.info(f"WPI: Staged weight buffer '{buffer_id}' ({size_bytes} bytes)")
+        effective_id = self._effective_buffer_id(buffer_id, shard_index, total_shards)
+        logger.info(f"WPI: Staged weight buffer '{effective_id}' ({size_bytes} bytes)")
 
-    def propagate(self, buffer_id: str, target_node_ids: list[str]):
-        """Call NodePropagate to NCCL broadcast the buffer to target nodes.
+    def propagate(
+        self,
+        buffer_id: str,
+        target_node_ids: list[str],
+        mode: int = 0,
+        shard_assignments: list = None,
+    ):
+        """Call NodePropagate to transfer the buffer to target nodes.
 
         This triggers the WPI driver to:
         1. Initialize NCCL communicator with all target nodes
-        2. Broadcast the VRAM buffer contents
+        2. Broadcast (mode=0) or scatter (mode=1) the VRAM buffer contents
         3. Send READY notification to all consumers on target nodes
 
         Args:
-            buffer_id: The buffer to broadcast.
-            target_node_ids: List of target node IPs to broadcast to.
+            buffer_id: The buffer to propagate.
+            target_node_ids: List of target node IPs.
+            mode: 0=BROADCAST (all targets get same data), 1=SCATTER (each target
+                gets a different shard). Defaults to BROADCAST.
+            shard_assignments: List of wpi_pb2.ShardAssignment objects for SCATTER
+                mode. Each specifies target_node_id, shard_index, offset_bytes,
+                length_bytes, and target_gpu_id.
         """
         from wpi_verl_plugin.proto import wpi_pb2
 
         stub = self._get_grpc_stub()
-        request = wpi_pb2.NodePropagateRequest(
-            buffer_id=buffer_id,
-            target_node_ids=target_node_ids,
+        kwargs = {
+            "buffer_id": buffer_id,
+            "target_node_ids": target_node_ids,
+            "mode": mode,
+        }
+        if shard_assignments:
+            kwargs["shard_assignments"] = shard_assignments
+
+        request = wpi_pb2.NodePropagateRequest(**kwargs)
+        mode_str = "SCATTER" if mode == 1 else "BROADCAST"
+        logger.info(
+            f"WPI: Propagating '{buffer_id}' to {len(target_node_ids)} target nodes "
+            f"(mode={mode_str}): {target_node_ids}..."
         )
-        logger.info(f"WPI: Propagating '{buffer_id}' to {len(target_node_ids)} target nodes: {target_node_ids}...")
         stub.NodePropagate(request)
         logger.info(f"WPI: Propagation complete for '{buffer_id}'")
 
@@ -267,7 +294,23 @@ class WPIClient:
         stub.NodeUnstageWeight(request)
         logger.info(f"WPI: Unstaged weight for claim '{claim_id}'")
 
-    def receive_fd(self, buffer_id: str, gpu_id: int = 0) -> int:
+    @staticmethod
+    def _effective_buffer_id(
+        buffer_id: str, shard_index: int = -1, total_shards: int = 0
+    ) -> str:
+        """Compute the shard-scoped buffer ID used by the driver.
+
+        The driver tracks sharded buffers as ``<buffer_id>__shard_<N>``.
+        Non-sharded buffers keep the original buffer_id.
+        """
+        if shard_index >= 0 and total_shards > 0:
+            return f"{buffer_id}__shard_{shard_index}"
+        return buffer_id
+
+    def receive_fd(
+        self, buffer_id: str, gpu_id: int = 0,
+        shard_index: int = -1, total_shards: int = 0,
+    ) -> int:
         """Connect to the WPI FD-passing UNIX socket and receive a file descriptor.
 
         The WPI driver exports the CUDA memory handle as a POSIX FD and passes
@@ -277,11 +320,14 @@ class WPIClient:
             buffer_id: The buffer to get the FD for.
             gpu_id: The absolute GPU ID to request. The WPI driver will handle
                 Dynamic Relocation if the buffer is on a different GPU.
+            shard_index: Shard index (-1 = unsharded).
+            total_shards: Total shard count (0 = unsharded).
 
         Returns:
             The received file descriptor (int).
         """
-        sock_path = os.path.join(self.socket_dir, f"{buffer_id}.sock")
+        effective_id = self._effective_buffer_id(buffer_id, shard_index, total_shards)
+        sock_path = os.path.join(self.socket_dir, f"{effective_id}.sock")
 
         # Wait for the socket to appear (driver may still be setting up)
         max_wait = 60
@@ -332,7 +378,7 @@ class WPIClient:
         if fd is None:
             raise RuntimeError(f"WPI: Failed to receive FD from {sock_path}")
 
-        logger.info(f"WPI: Received FD {fd} for buffer '{buffer_id}' on GPU {gpu_id}")
+        logger.info(f"WPI: Received FD {fd} for buffer '{effective_id}' on GPU {gpu_id}")
         return fd
 
     def _init_cuda_context(self, device_id: int = 0):
@@ -541,7 +587,10 @@ class WPIClient:
         tensor = torch.as_tensor(raw, device=torch.device("cuda"))
         return tensor
 
-    def connect_notify_socket(self, buffer_id: str, timeout: float = 60.0):
+    def connect_notify_socket(
+        self, buffer_id: str, timeout: float = 60.0,
+        shard_index: int = -1, total_shards: int = 0,
+    ):
         """Connect to the WPI notify socket for receiving READY signals.
 
         This should be called once during prepare(). The socket connection
@@ -550,8 +599,11 @@ class WPIClient:
         Args:
             buffer_id: The buffer whose notifications to listen for.
             timeout: Maximum time to wait for the socket to appear.
+            shard_index: Shard index (-1 = unsharded).
+            total_shards: Total shard count (0 = unsharded).
         """
-        notify_path = os.path.join(self.socket_dir, f"{buffer_id}_notify.sock")
+        effective_id = self._effective_buffer_id(buffer_id, shard_index, total_shards)
+        notify_path = os.path.join(self.socket_dir, f"{effective_id}_notify.sock")
 
         waited = 0
         while not os.path.exists(notify_path) and waited < timeout:

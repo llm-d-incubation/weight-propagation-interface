@@ -221,3 +221,124 @@ Validation of zero-copy broadcast operations was conducted by transmitting a 10 
 **Performance Delta & Speed of Light Analysis**
 - **Throughput Increase:** RDMA acceleration delivered a **565% increase** in bandwidth over the baseline socket transfer.
 - **Speed of Light Context:** The a3-ultragpu-8g maximum network bandwidth per NIC is 50 GB/s. The transfer achieved **73.14% of maximum bandwidth**. For comparison, Ray on A4 achieved 35 GB/s (70% of maximum bandwidth).
+
+---
+
+## Step 6: Sharded Model Distribution
+
+For models too large to fit on a single GPU (e.g., Kimi K2 at 1T parameters, Llama 405B), WPI supports automatic model sharding. A single `WeightBuffer` can be split across multiple GPUs and nodes.
+
+### 6.1 Create a Sharded WeightBuffer
+
+```yaml
+apiVersion: wpi.sig.k8s.io/v1alpha1
+kind: WeightBuffer
+metadata:
+  name: kimi-k2-weights
+spec:
+  provider: wpi-driver
+  size: "2Ti"  # Total model size
+  sourcePath: "/mnt/nfs/models/kimi-k2/"
+  sharding:
+    strategy: TensorParallel
+    numShards: 8
+    # Option A: Let WPI auto-discover shards by splitting evenly
+    # Option B: Explicit shard files for pre-split checkpoints:
+    # shardFiles:
+    # - index: 0
+    #   path: "/mnt/nfs/models/kimi-k2/model-00001-of-00008.safetensors"
+    #   sizeBytes: 268435456000
+    # - index: 1
+    #   path: "/mnt/nfs/models/kimi-k2/model-00002-of-00008.safetensors"
+    #   sizeBytes: 268435456000
+    # ...
+```
+
+After applying, the operator populates `status.discoveredShards`:
+```bash
+kubectl get weightbuffer kimi-k2-weights -o jsonpath='{.status.totalShards}'
+# Output: 8
+```
+
+### 6.2 Create Shard-Aware WeightClaims
+
+Each GPU worker claims a specific shard:
+
+```yaml
+apiVersion: wpi.sig.k8s.io/v1alpha1
+kind: WeightClaim
+metadata:
+  name: kimi-shard-0
+  namespace: default
+spec:
+  sourceBuffer: kimi-k2-weights
+  shardIndex: 0  # Explicitly request shard 0
+```
+
+**Auto-assignment:** If `shardIndex` is omitted, the operator automatically assigns shards based on pod annotations in this priority order:
+1. `wpi.sig.k8s.io/shard-index` — explicit WPI annotation
+2. `batch.kubernetes.io/job-completion-index` — Kubernetes Job index
+3. `ray.io/rank` — Ray worker rank
+
+### 6.3 Consumer Code for Sharded Buffers
+
+The `WPIClient` handles shard-scoped buffer IDs transparently:
+
+```python
+from wpi_verl_plugin.client import WPIClient
+
+client = WPIClient(socket_dir="/run/wpi/sockets")
+
+# Stage shard 0 of 8
+client.stage_weight(
+    buffer_id="kimi-k2-weights",
+    size_bytes=268_435_456_000,  # Size of this shard
+    claim_id="kimi-shard-0",
+    shard_index=0,
+    total_shards=8,
+)
+
+# FD socket automatically uses shard-scoped name: kimi-k2-weights__shard_0.sock
+fd = client.receive_fd("kimi-k2-weights", shard_index=0, total_shards=8)
+device_ptr = client.import_cuda_memory(fd, size_bytes=268_435_456_000)
+tensor = client.wrap_as_buffer(device_ptr, size_bytes=268_435_456_000)
+
+# Notification socket also shard-scoped
+client.connect_notify_socket("kimi-k2-weights", shard_index=0, total_shards=8)
+```
+
+### 6.4 Scatter Propagation
+
+For distributing different shards to different nodes, use SCATTER mode:
+
+```python
+from wpi_verl_plugin.proto import wpi_pb2
+
+# Build shard assignments — each target gets a different byte range
+assignments = [
+    wpi_pb2.ShardAssignment(
+        target_node_id="10.0.0.2",
+        shard_index=0,
+        offset_bytes=0,
+        length_bytes=268_435_456_000,
+        target_gpu_id=0,
+    ),
+    wpi_pb2.ShardAssignment(
+        target_node_id="10.0.0.3",
+        shard_index=1,
+        offset_bytes=268_435_456_000,
+        length_bytes=268_435_456_000,
+        target_gpu_id=0,
+    ),
+]
+
+client.propagate(
+    buffer_id="kimi-k2-weights",
+    target_node_ids=["10.0.0.2", "10.0.0.3"],
+    mode=1,  # SCATTER
+    shard_assignments=assignments,
+)
+```
+
+In SCATTER mode, the source uses `ncclSend` and each target uses `ncclRecv` to transfer only the assigned byte range. This is significantly more efficient than broadcasting the entire model when each node only needs a partition.
+

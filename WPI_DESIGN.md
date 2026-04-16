@@ -29,12 +29,23 @@ WPI introduces two core custom resources acting as the Control Plane Interface:
         *   `sourcePath`: The location from which to initially stage the data (e.g., a path to Safetensors).
         *   `layout`: Describes the tensor layout.
         *   `retentionPolicy`: Determines if the weights persist beyond the lifecycle of requesting pods.
+        *   `sharding` *(optional)*: Enables automatic model sharding. Contains:
+            *   `strategy`: One of `TensorParallel`, `ExpertParallel`, `PipelineParallel`, or `Custom`.
+            *   `numShards`: Number of shards to split the model into.
+            *   `shardFiles` *(optional)*: Explicit list of `{index, path, sizeBytes}` for pre-split models.
+            *   `filePattern` *(optional)*: Pattern for auto-discovering shard files (e.g., `model-{index:05d}-of-{total:05d}.safetensors`).
+    *   **Status fields (populated by operator):**
+        *   `totalShards`: Discovered number of shards.
+        *   `discoveredShards`: List of `{index, path, sizeBytes, offsetBytes}` resolved from the sharding spec.
 
 *   **`WeightClaim` (Namespace level):** Represents a specific pod or job's request to use a `WeightBuffer`. This mirrors the PersistentVolumeClaim (PVC) or DRA resource claim pattern.
     *   **Spec fields:**
         *   `sourceBuffer`: A reference to the underlying `WeightBuffer`.
         *   `propagationPolicy`: Defines caching or locality requirements.
         *   `targetLayout`: Can request reshaping of the tensor layout for the specific consumer.
+        *   `shardIndex` *(optional)*: Which shard this claim requests. If omitted, the operator auto-assigns based on pod annotations (`wpi.sig.k8s.io/shard-index`, `batch.kubernetes.io/job-completion-index`, or `ray.io/rank`).
+    *   **Status fields (populated by operator):**
+        *   `assignedShardIndex`: The resolved shard index for this claim.
 
 ### 3.2 WPI Operator
 
@@ -61,7 +72,11 @@ The core data-plane interface responsible for moving and exposing memory.
     3. If a `source_path` is provided, parses the weights (e.g., Safetensors) and initiates a high-bandwidth zero-copy `HostToDevice` copy directly into the VRAM block.
     4. Starts a background thread hosting a UNIX socket (e.g., `/run/wpi/sockets/<buffer_id>.sock`). This socket uses `SCM_RIGHTS` `sendmsg` to pass the raw OS File Descriptor (FD) to a connecting consumer.
 *   **`NodePropagate`**: 
-    Initiates Multi-Node broadcast. Instead of routing through the CPU network stack, the driver establishes an `NcclCommunicator`. Rank 0 (the source) uses `cupy.cuda.nccl.bcast` to push the VRAM array directly over the high-speed network (InfiniBand/RoCE) to target nodes. target nodes receive the broadcast directly into their pre-allocated VRAM blocks.
+    Initiates multi-node weight transfer. Supports two modes:
+    *   **BROADCAST (default):** Rank 0 (the source) uses `ncclBcast` to push the full VRAM buffer over the high-speed network (InfiniBand/RoCE) to all target nodes simultaneously. All targets receive identical data.
+    *   **SCATTER:** Each target receives a different shard of the buffer. The source uses `ncclSend`/`ncclRecv` group operations to send specific byte ranges (`offset_bytes:offset_bytes+length_bytes`) to specific targets. This enables distributing a single large model across multiple nodes with each receiving only its assigned shard.
+    
+    The propagation mode and shard assignments are communicated to targets via the TCP handshake that precedes NCCL operations. The driver also sends `PRE_UPDATE` notifications to local consumers before overwriting buffer contents, allowing them to flush caches (e.g., KV cache).
 *   **`NodeRegisterWeight`**: 
     Returns the internal DMA-buf or shareable handle ID.
 *   **`NodeTranslateAndMap`**: 
@@ -118,3 +133,45 @@ This bypasses memory allocation inside the pod entirely. The weights exist in th
 *   **P2P Topology Awareness:** Integrating with PCIe/NVLink topology APIs to perfectly schedule readers based on hardware distance (NUMA node, NVLink bridge).
 *   **TPU Support:** Expanding the memory abstraction from `libcuda` and `cuMem` over to `libtpu` equivalent memory export constructs.
 *   **On-the-Fly Reshaping:** Implementing custom CUDA kernels in the WPI driver to transpose or shard memory blocks (Column-major to Row-major) dynamically as it is passed to the consumer, accommodating different framework needs from the same physical copy.
+
+---
+
+## 7. Sharding Support
+
+WPI supports first-class model sharding, enabling a single `WeightBuffer` to be automatically distributed across multiple GPUs and nodes. This is critical for models that exceed single-GPU memory (e.g., Kimi K2 at 1T parameters, Llama 405B).
+
+### 7.1 Sharding Strategies
+
+| Strategy | Description | Use Case |
+|---|---|---|
+| `TensorParallel` | Even byte-range splits across GPUs | Most common; each GPU gets a contiguous slice |
+| `ExpertParallel` | Expert-to-GPU mapping for MoE models | Kimi K2 (384 experts), Mixtral |
+| `PipelineParallel` | Layer blocks assigned to different stages | Deep models split by layer groups |
+| `Custom` | User-defined shard-to-file mapping | Pre-sharded checkpoints |
+
+### 7.2 Shard Discovery
+
+The WPI operator resolves shards via three paths (in priority order):
+1. **Explicit `shardFiles`** — user provides exact `{index, path, sizeBytes}` per shard
+2. **`filePattern`** — operator constructs paths like `model-00001-of-00008.safetensors`
+3. **Capacity split** — operator divides `size / numShards` into even byte ranges with `offsetBytes`
+
+### 7.3 Shard-Scoped Buffers
+
+The driver tracks sharded buffers using a naming convention: `<buffer_id>__shard_<N>`. Each shard gets its own:
+- VRAM allocation
+- FD-passing UNIX socket (`<buffer_id>__shard_<N>.sock`)
+- Notification socket (`<buffer_id>__shard_<N>_notify.sock`)
+
+This is transparent to the consumer — the `WPIClient` resolves the correct shard-scoped ID automatically.
+
+### 7.4 End-to-End Sharded Propagation
+
+1. **Admin:** Creates a `WeightBuffer` with `sharding: {strategy: TensorParallel, numShards: 8}`.
+2. **Operator:** Discovers 8 shards, populates `status.discoveredShards` with paths/sizes.
+3. **Job:** Creates 8 `WeightClaim` objects. Shard indices are auto-assigned from pod annotations.
+4. **Driver (source):** Stages the full model into a single VRAM buffer.
+5. **Propagation:** The operator calls `NodePropagate` with `mode: SCATTER` and `shard_assignments` mapping each target to its byte range.
+6. **Driver (targets):** Each target receives only its shard via `ncclRecv`, deposits it at the correct offset in its local buffer.
+7. **Pods:** Each pod maps its local shard and begins parallel execution.
+

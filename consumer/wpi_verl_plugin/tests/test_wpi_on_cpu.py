@@ -185,3 +185,90 @@ class TestWPIProtoMessages:
 
         req = wpi_pb2.NodeUnstageWeightRequest(claim_id="claim-1")
         assert req.claim_id == "claim-1"
+
+    def test_node_stage_weight_with_shard_fields(self):
+        """Should be able to construct a NodeStageWeightRequest with shard fields."""
+        from wpi_verl_plugin.proto import wpi_pb2
+
+        req = wpi_pb2.NodeStageWeightRequest(
+            claim_id="claim-1",
+            buffer_id="kimi-k2",
+            source_path="/models/shard-00001.safetensors",
+            size_bytes=1024 * 1024 * 1024,
+            shard_index=0,
+            total_shards=8,
+        )
+        assert req.shard_index == 0
+        assert req.total_shards == 8
+        assert req.buffer_id == "kimi-k2"
+
+    def test_node_stage_weight_defaults_unsharded(self):
+        """Shard fields should default to 0 (unsharded) when not specified."""
+        from wpi_verl_plugin.proto import wpi_pb2
+
+        req = wpi_pb2.NodeStageWeightRequest(
+            claim_id="claim-1",
+            buffer_id="buf-1",
+            size_bytes=1024,
+        )
+        assert req.shard_index == 0  # proto3 default for int32
+        assert req.total_shards == 0
+
+    def test_node_propagate_scatter_mode(self):
+        """Should be able to construct a SCATTER-mode NodePropagateRequest."""
+        from wpi_verl_plugin.proto import wpi_pb2
+
+        assignments = [
+            wpi_pb2.ShardAssignment(
+                target_node_id="10.0.0.1",
+                shard_index=0,
+                offset_bytes=0,
+                length_bytes=5 * 1024**3,
+                target_gpu_id=0,
+            ),
+            wpi_pb2.ShardAssignment(
+                target_node_id="10.0.0.2",
+                shard_index=1,
+                offset_bytes=5 * 1024**3,
+                length_bytes=5 * 1024**3,
+                target_gpu_id=0,
+            ),
+        ]
+        req = wpi_pb2.NodePropagateRequest(
+            buffer_id="buf-1",
+            target_node_ids=["10.0.0.1", "10.0.0.2"],
+            mode=1,  # SCATTER
+            shard_assignments=assignments,
+        )
+        assert req.mode == 1
+        assert len(req.shard_assignments) == 2
+        assert req.shard_assignments[0].target_node_id == "10.0.0.1"
+        assert req.shard_assignments[1].offset_bytes == 5 * 1024**3
+
+    def test_propagate_mode_enum(self):
+        """PropagateMode enum should have BROADCAST=0 and SCATTER=1."""
+        from wpi_verl_plugin.proto import wpi_pb2
+
+        assert wpi_pb2.BROADCAST == 0
+        assert wpi_pb2.SCATTER == 1
+
+
+class TestWPIClientSharding:
+    """Tests for WPIClient shard-scoped buffer ID logic."""
+
+    def test_effective_buffer_id_unsharded(self):
+        """Non-sharded buffers should return the original buffer_id."""
+        from wpi_verl_plugin.client import WPIClient
+
+        assert WPIClient._effective_buffer_id("buf-1") == "buf-1"
+        assert WPIClient._effective_buffer_id("buf-1", -1, 0) == "buf-1"
+        assert WPIClient._effective_buffer_id("buf-1", -1, 8) == "buf-1"
+
+    def test_effective_buffer_id_sharded(self):
+        """Sharded buffers should return buffer_id__shard_N."""
+        from wpi_verl_plugin.client import WPIClient
+
+        assert WPIClient._effective_buffer_id("kimi-k2", 0, 8) == "kimi-k2__shard_0"
+        assert WPIClient._effective_buffer_id("kimi-k2", 7, 8) == "kimi-k2__shard_7"
+        assert WPIClient._effective_buffer_id("buf", 3, 4) == "buf__shard_3"
+

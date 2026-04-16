@@ -110,6 +110,11 @@ message NodeStageWeightRequest {
   string buffer_id = 2;
   string source_path = 3;
   uint64 size_bytes = 4;
+  // Shard-aware staging: which shard to stage.
+  // -1 or absent means stage the entire buffer (legacy behavior).
+  int32 shard_index = 5;
+  // Total number of shards for validation.
+  int32 total_shards = 6;
 }
 
 message NodeStageWeightResponse {}
@@ -131,10 +136,29 @@ message LayoutDescriptor {
   }
 }
 
+// PropagateMode controls whether all targets receive the same data
+// or each target receives a different shard.
+enum PropagateMode {
+  BROADCAST = 0;  // All targets get the same data (default, current behavior)
+  SCATTER = 1;    // Each target gets a different shard
+}
+
+// ShardAssignment maps a target node to a specific byte range of the source buffer.
+message ShardAssignment {
+  string target_node_id = 1;
+  int32 shard_index = 2;
+  uint64 offset_bytes = 3;  // Byte offset into the source buffer
+  uint64 length_bytes = 4;  // Size of this shard in bytes
+  int32 target_gpu_id = 5;  // Which GPU on the target node receives this shard
+}
+
 message NodePropagateRequest {
   string buffer_id = 1;
   repeated string target_node_ids = 2;
   LayoutDescriptor target_layout = 3;
+  // Scatter mode: each target gets a different shard
+  PropagateMode mode = 4;
+  repeated ShardAssignment shard_assignments = 5;
 }
 
 message NodePropagateResponse {}

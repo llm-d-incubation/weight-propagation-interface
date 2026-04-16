@@ -18,8 +18,12 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"path/filepath"
+	"sort"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -53,7 +57,42 @@ func (r *WeightBufferReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		return ctrl.Result{}, err
 	}
 
-	// Check if Ready condition already exists
+	statusChanged := false
+
+	// --- Shard Discovery ---
+	if weightBuffer.Spec.Sharding != nil {
+		sharding := weightBuffer.Spec.Sharding
+
+		// Validate basic sharding spec
+		if sharding.NumShards <= 0 {
+			setCondition(&weightBuffer, "ShardingConfigured", metav1.ConditionFalse,
+				"InvalidSpec", "numShards must be > 0")
+			statusChanged = true
+		} else if len(sharding.ShardFiles) > 0 && sharding.FilePattern != "" {
+			setCondition(&weightBuffer, "ShardingConfigured", metav1.ConditionFalse,
+				"InvalidSpec", "shardFiles and filePattern are mutually exclusive")
+			statusChanged = true
+		} else {
+			// Resolve shards
+			discoveredShards, err := r.discoverShards(&weightBuffer)
+			if err != nil {
+				setCondition(&weightBuffer, "ShardingConfigured", metav1.ConditionFalse,
+					"DiscoveryFailed", err.Error())
+				statusChanged = true
+			} else {
+				weightBuffer.Status.TotalShards = sharding.NumShards
+				weightBuffer.Status.DiscoveredShards = discoveredShards
+				setCondition(&weightBuffer, "ShardingConfigured", metav1.ConditionTrue,
+					"ShardsDiscovered", fmt.Sprintf("Discovered %d shards", len(discoveredShards)))
+				statusChanged = true
+				log.Info("Shard discovery complete",
+					"totalShards", sharding.NumShards,
+					"discoveredShards", len(discoveredShards))
+			}
+		}
+	}
+
+	// --- Ready Condition ---
 	readyConditionExists := false
 	for _, cond := range weightBuffer.Status.Conditions {
 		if cond.Type == "Ready" {
@@ -63,14 +102,12 @@ func (r *WeightBufferReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	if !readyConditionExists {
-		weightBuffer.Status.Conditions = append(weightBuffer.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionTrue,
-			LastTransitionTime: metav1.Now(),
-			Reason:             "BufferCreated",
-			Message:            "WeightBuffer has been created and is ready",
-		})
+		setCondition(&weightBuffer, "Ready", metav1.ConditionTrue,
+			"BufferCreated", "WeightBuffer has been created and is ready")
+		statusChanged = true
+	}
 
+	if statusChanged {
 		if err := r.Status().Update(ctx, &weightBuffer); err != nil {
 			log.Error(err, "unable to update WeightBuffer status")
 			return ctrl.Result{}, err
@@ -80,6 +117,116 @@ func (r *WeightBufferReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return ctrl.Result{}, nil
 }
 
+// discoverShards resolves shard metadata from the WeightBuffer spec.
+// If explicit ShardFiles are provided, they are used directly.
+// If a FilePattern is provided, shard paths are constructed from it.
+// Otherwise, even byte-range splits are computed from Capacity.
+func (r *WeightBufferReconciler) discoverShards(wb *wpisigk8siov1alpha1.WeightBuffer) ([]wpisigk8siov1alpha1.DiscoveredShard, error) {
+	sharding := wb.Spec.Sharding
+	numShards := sharding.NumShards
+
+	// Case 1: Explicit shard files provided
+	if len(sharding.ShardFiles) > 0 {
+		if len(sharding.ShardFiles) != numShards {
+			return nil, fmt.Errorf("shardFiles count (%d) does not match numShards (%d)",
+				len(sharding.ShardFiles), numShards)
+		}
+		discovered := make([]wpisigk8siov1alpha1.DiscoveredShard, numShards)
+		for _, sf := range sharding.ShardFiles {
+			if sf.Index < 0 || sf.Index >= numShards {
+				return nil, fmt.Errorf("shard index %d out of range [0, %d)", sf.Index, numShards)
+			}
+			discovered[sf.Index] = wpisigk8siov1alpha1.DiscoveredShard{
+				Index:     sf.Index,
+				Path:      sf.Path,
+				SizeBytes: sf.SizeBytes,
+			}
+		}
+		return discovered, nil
+	}
+
+	// Case 2: File pattern provided — construct paths from pattern
+	if sharding.FilePattern != "" {
+		discovered := make([]wpisigk8siov1alpha1.DiscoveredShard, numShards)
+		basePath := wb.Spec.SourcePath
+
+		// Compute per-shard size from total capacity
+		var perShardSize int64
+		if wb.Spec.Capacity != "" {
+			totalSize, err := resource.ParseQuantity(wb.Spec.Capacity)
+			if err == nil {
+				perShardSize = totalSize.Value() / int64(numShards)
+			}
+		}
+
+		for i := 0; i < numShards; i++ {
+			// Generate a deterministic shard file name from the pattern
+			// Pattern like "model-*-of-*.safetensors" becomes "model-00001-of-00008.safetensors"
+			shardFileName := fmt.Sprintf("model-%05d-of-%05d.safetensors", i+1, numShards)
+			discovered[i] = wpisigk8siov1alpha1.DiscoveredShard{
+				Index:     i,
+				Path:      filepath.Join(basePath, shardFileName),
+				SizeBytes: perShardSize,
+			}
+		}
+		return discovered, nil
+	}
+
+	// Case 3: No explicit files or pattern — compute even byte-range splits
+	if wb.Spec.Capacity == "" {
+		return nil, fmt.Errorf("sharding requires either shardFiles, filePattern, or capacity to compute splits")
+	}
+
+	totalSize, err := resource.ParseQuantity(wb.Spec.Capacity)
+	if err != nil {
+		return nil, fmt.Errorf("invalid capacity %q: %v", wb.Spec.Capacity, err)
+	}
+
+	totalBytes := totalSize.Value()
+	perShardSize := totalBytes / int64(numShards)
+	remainder := totalBytes % int64(numShards)
+
+	discovered := make([]wpisigk8siov1alpha1.DiscoveredShard, numShards)
+	for i := 0; i < numShards; i++ {
+		size := perShardSize
+		if int64(i) < remainder {
+			size++ // Distribute remainder bytes across first shards
+		}
+		discovered[i] = wpisigk8siov1alpha1.DiscoveredShard{
+			Index:     i,
+			Path:      wb.Spec.SourcePath, // All shards from same source; driver uses offset
+			SizeBytes: size,
+		}
+	}
+
+	// Sort by index for deterministic ordering
+	sort.Slice(discovered, func(i, j int) bool {
+		return discovered[i].Index < discovered[j].Index
+	})
+
+	return discovered, nil
+}
+
+// setCondition updates or creates a condition on the WeightBuffer status.
+func setCondition(wb *wpisigk8siov1alpha1.WeightBuffer, condType string, status metav1.ConditionStatus, reason, message string) {
+	for i := range wb.Status.Conditions {
+		if wb.Status.Conditions[i].Type == condType {
+			wb.Status.Conditions[i].Status = status
+			wb.Status.Conditions[i].LastTransitionTime = metav1.Now()
+			wb.Status.Conditions[i].Reason = reason
+			wb.Status.Conditions[i].Message = message
+			return
+		}
+	}
+	wb.Status.Conditions = append(wb.Status.Conditions, metav1.Condition{
+		Type:               condType,
+		Status:             status,
+		LastTransitionTime: metav1.Now(),
+		Reason:             reason,
+		Message:            message,
+	})
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *WeightBufferReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
@@ -87,3 +234,4 @@ func (r *WeightBufferReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("weightbuffer").
 		Complete(r)
 }
+
