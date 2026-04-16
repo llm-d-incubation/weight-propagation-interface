@@ -96,15 +96,23 @@ spec:
           valueFrom:
             fieldRef:
               fieldPath: spec.nodeName
+        - name: PATH
+          value: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/kubernetes/bin/nvidia/bin"
+        - name: LD_LIBRARY_PATH
+          value: "/home/kubernetes/bin/nvidia/lib64"
         securityContext:
           privileged: true
         volumeMounts:
+        - name: nvidia-lib
+          mountPath: /home/kubernetes/bin/nvidia/lib64
         - name: kubelet-plugins
           mountPath: /var/lib/kubelet/plugins
         - name: kubelet-plugins-registry
           mountPath: /var/lib/kubelet/plugins_registry
         - name: wpi-sockets
           mountPath: /run/wpi/sockets
+        - name: nvidia-bin
+          mountPath: /home/kubernetes/bin/nvidia/bin
       volumes:
       - name: weight-memory
         hostPath:
@@ -137,6 +145,10 @@ spec:
       - name: wpi-code-vol
         configMap:
           name: wpi-code
+      - name: nvidia-bin
+        hostPath:
+          path: /home/kubernetes/bin/nvidia/bin
+          type: DirectoryOrCreate
 ---
 apiVersion: v1
 kind: Namespace

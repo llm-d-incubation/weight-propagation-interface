@@ -474,7 +474,7 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
 
         logger.info(f"NodeStageWeight called for claim: {request.claim_id}, "
                     f"buffer: {request.buffer_id}, effective_id: {effective_buffer_id}"
-                    f"{f', shard: {shard_index}/{total_shards}' if is_sharded else ''}")
+                    f"{f', shard: {shard_index}/{total_shards}' if is_sharded else f' (Not sharded - raw shard_index={shard_index}, raw_total={total_shards})'}")
         
         try:
             KNOWN_CLAIMS[request.claim_id] = effective_buffer_id
@@ -728,7 +728,7 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
                         rank_map[target_ip] = i + 1
                     
                     # Use NCCL group for concurrent sends
-                    comm.groupStart()
+                    cupy.cuda.nccl.groupStart()
                     for assignment in request.shard_assignments:
                         target_rank = rank_map.get(assignment.target_node_id)
                         if target_rank is None:
@@ -743,7 +743,7 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
                         logger.info(f"  Shard {assignment.shard_index}: sending {length} bytes "
                                     f"(offset={offset}) to rank {target_rank} ({assignment.target_node_id})")
                         comm.send(shard_ptr, shard_elements, cupy.cuda.nccl.NCCL_FLOAT16, target_rank, 0)
-                    comm.groupEnd()
+                    cupy.cuda.nccl.groupEnd()
                     
                     cupy.cuda.Device(cuda_allocator.device.value).synchronize()
                     logger.info(f"SCATTER: All shard sends completed.")

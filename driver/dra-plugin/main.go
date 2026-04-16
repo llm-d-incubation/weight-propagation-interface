@@ -120,38 +120,63 @@ func (p *wpiPlugin) NodePrepareResources(ctx context.Context, req *drav1.NodePre
 			realClaimName = name
 		}
 
-		// 1. Fetch the WeightClaim to find the WeightBufferName using the realClaimName
+		var shardIndex int32 = -1
+		var totalShards int32 = 0
+
+		// 1. Fetch the WeightClaim to find the WeightBufferName and shardIndex
 		wcUnstructured, err := dynClient.Resource(wcGVR).Namespace(namespace).Get(ctx, realClaimName, metav1.GetOptions{})
 		if err == nil {
 			var found bool
 			bufferName, found, _ = unstructured.NestedString(wcUnstructured.Object, "spec", "weightBufferName")
-			if found && bufferName != "" {
-				// 2. Fetch the WeightBuffer to get Capacity and SourcePath
-				wbUnstructured, err := dynClient.Resource(wbGVR).Namespace(namespace).Get(ctx, bufferName, metav1.GetOptions{})
-				if err == nil {
-					sourcePath, _, _ = unstructured.NestedString(wbUnstructured.Object, "spec", "sourcePath")
-					capacityStr, _, _ := unstructured.NestedString(wbUnstructured.Object, "spec", "capacity")
-
-					// Parse capacity (e.g. "5Gi", "10GiB") into bytes
-					if capacityStr != "" {
-						qty, err := resource.ParseQuantity(capacityStr)
-						if err == nil {
-							sizeBytes = uint64(qty.Value())
-						} else {
-							log.Printf("Failed to parse capacity '%s': %v", capacityStr, err)
-						}
+		// Extract shardIndex
+		// Unstructured numbers may be unmarshaled as float64
+		if sIndexRaw, foundIdx, _ := unstructured.NestedFieldNoCopy(wcUnstructured.Object, "spec", "shardIndex"); foundIdx {
+			if sIndexFlt, ok := sIndexRaw.(float64); ok {
+				shardIndex = int32(sIndexFlt)
+			} else if sIndexInt, ok := sIndexRaw.(int64); ok {
+				shardIndex = int32(sIndexInt)
+			}
+		}
+			
+		if found && bufferName != "" {
+			// 2. Fetch the WeightBuffer to get Capacity, SourcePath, and numShards
+			wbUnstructured, err := dynClient.Resource(wbGVR).Namespace(namespace).Get(ctx, bufferName, metav1.GetOptions{})
+			if err == nil {
+				sourcePath, _, _ = unstructured.NestedString(wbUnstructured.Object, "spec", "sourcePath")
+				capacityStr, _, _ := unstructured.NestedString(wbUnstructured.Object, "spec", "capacity")
+					
+				// Extract totalShards
+				if nShardsRaw, foundTotal, _ := unstructured.NestedFieldNoCopy(wbUnstructured.Object, "spec", "sharding", "numShards"); foundTotal {
+					if nFlt, ok := nShardsRaw.(float64); ok {
+						totalShards = int32(nFlt)
+					} else if nInt, ok := nShardsRaw.(int64); ok {
+						totalShards = int32(nInt)
 					}
-					log.Printf("Found WeightBuffer %s: SourcePath=%s, SizeBytes=%d", bufferName, sourcePath, sizeBytes)
-
-					totalVRAM, vramErr := getTotalVRAM()
-					if vramErr == nil && sizeBytes > totalVRAM {
-						errStr := fmt.Sprintf("requested WeightBuffer capacity %d bytes exceeds total node VRAM %d bytes", sizeBytes, totalVRAM)
-						log.Printf(errStr)
-						return nil, fmt.Errorf(errStr)
-					}
-				} else {
-					log.Printf("Failed to fetch WeightBuffer %s: %v", bufferName, err)
 				}
+
+				// Parse capacity (e.g. "5Gi", "10GiB") into bytes
+				if capacityStr != "" {
+					qty, err := resource.ParseQuantity(capacityStr)
+					if err == nil {
+						sizeBytes = uint64(qty.Value())
+						if totalShards > 0 {
+							sizeBytes = sizeBytes / uint64(totalShards)
+						}
+					} else {
+						log.Printf("Failed to parse capacity '%s': %v", capacityStr, err)
+					}
+				}
+				log.Printf("Found WeightBuffer %s: SourcePath=%s, Effective SizeBytes=%d", bufferName, sourcePath, sizeBytes)
+
+				totalVRAM, vramErr := getTotalVRAM()
+				if vramErr == nil && sizeBytes > totalVRAM {
+					errStr := fmt.Sprintf("requested shard capacity %d bytes exceeds total node VRAM %d bytes", sizeBytes, totalVRAM)
+					log.Printf(errStr)
+					return nil, fmt.Errorf(errStr)
+				}
+			} else {
+				log.Printf("Failed to fetch WeightBuffer %s: %v", bufferName, err)
+			}
 			}
 		} else {
 			log.Printf("Failed to fetch WeightClaim %s: %v", realClaimName, err)
@@ -162,10 +187,12 @@ func (p *wpiPlugin) NodePrepareResources(ctx context.Context, req *drav1.NodePre
 		}
 
 		_, err = client.NodeStageWeight(ctx, &wpipb.NodeStageWeightRequest{
-			ClaimId:    realClaimName,
-			BufferId:   bufferName,
-			SourcePath: sourcePath,
-			SizeBytes:  sizeBytes,
+			ClaimId:     realClaimName,
+			BufferId:    bufferName,
+			SourcePath:  sourcePath,
+			SizeBytes:   sizeBytes,
+			ShardIndex:  shardIndex,
+			TotalShards: totalShards,
 		})
 		if err != nil {
 			log.Printf("Failed to call NodeStageWeight for claim %s: %v", claim.Uid, err)
