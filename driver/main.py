@@ -168,6 +168,28 @@ def start_nccl_target_server():
     server.listen(10)
     logger.info(f"NCCL target receiver server listening on 0.0.0.0:{port}")
     
+def send_pre_update_signal(buffer_id: str):
+    """Send PRE_UPDATE signal to local consumers before writing new weights.
+    
+    This allows consumers (e.g., vLLM/SGLang rollout workers) to flush
+    caches (like the KV cache) before the shared VRAM buffer is overwritten.
+    """
+    if buffer_id not in ALLOCATED_BUFFERS:
+        return
+    info = ALLOCATED_BUFFERS[buffer_id]
+    notify_sockets = info.get("notify_sockets", [])
+    broken_sockets = []
+    for s in notify_sockets:
+        try:
+            s.sendall(b"PRE_UPDATE\n")
+            logger.debug(f"Sent PRE_UPDATE notification for buffer {buffer_id}")
+        except Exception as e:
+            logger.warning(f"Failed to send PRE_UPDATE: {e}")
+            broken_sockets.append(s)
+    for s in broken_sockets:
+        if s in notify_sockets:
+            notify_sockets.remove(s)
+
 def handle_target_connection(conn, addr):
     try:
         logger.info(f"Accepted NCCL transfer connection from {addr}")
@@ -183,16 +205,29 @@ def handle_target_connection(conn, addr):
             conn.close()
             return
         
-        parts = buf.split(b"\n", 3)
+        parts = buf.split(b"\n", 5)
         buffer_id = parts[0].decode('utf-8')
         world_size = int(parts[1].decode('utf-8'))
         rank = int(parts[2].decode('utf-8'))
+        # Parse propagation mode: 0=BROADCAST, 1=SCATTER
+        mode = int(parts[3].decode('utf-8')) if len(parts) > 4 else 0
         
-        nccl_id_bytes = parts[3]
+        # For SCATTER, parse the receive offset and length
+        scatter_offset = 0
+        scatter_length = 0
+        if mode == 1 and len(parts) > 5:
+            scatter_meta = parts[4].decode('utf-8')
+            meta_parts = scatter_meta.split(',')
+            scatter_offset = int(meta_parts[0])
+            scatter_length = int(meta_parts[1])
+        
+        nccl_id_bytes = parts[-1]
         while len(nccl_id_bytes) < 128:
             nccl_id_bytes += conn.recv(128 - len(nccl_id_bytes))
             
-        logger.info(f"Target received buffer_id: {buffer_id}, world_size: {world_size}, rank: {rank} and nccl_id.")
+        mode_str = "SCATTER" if mode == 1 else "BROADCAST"
+        logger.info(f"Target received buffer_id: {buffer_id}, world_size: {world_size}, "
+                    f"rank: {rank}, mode: {mode_str} and nccl_id.")
         
         if buffer_id not in ALLOCATED_BUFFERS:
             logger.error(f"Target buffer {buffer_id} not found in ALLOCATED_BUFFERS!")
@@ -204,27 +239,38 @@ def handle_target_connection(conn, addr):
         device_ptr = info["device_ptr"]
         size_bytes = info["size_bytes"]
         
+        # Send pre-update signal to local consumers on this target node
+        send_pre_update_signal(buffer_id)
+        
         conn.sendall(b"OK\n")
         
         if CUPY_AVAILABLE and cuda_allocator:
             logger.info(f"Target initializing NCCL comm...")
-            
-            num_elements = size_bytes // 2 # float16
             
             # Wrap VMM device_ptr through cupy's memory management
             # so NCCL can properly handle the pointer
             mem = cupy.cuda.UnownedMemory(device_ptr, size_bytes, None)
             memptr = cupy.cuda.MemoryPointer(mem, 0)
             
-            with cupy.cuda.Device(cuda_allocator.device.value):
+            with cupy.cuda.Device(info["gpu_id"]):
                 comm = cupy.cuda.nccl.NcclCommunicator(world_size, nccl_id_bytes, rank)
-                logger.info(f"Target NCCL comm initialized (Rank {rank}/{world_size}). Starting bcast recv...")
                 
                 start_time = time.time()
-                # bcast: buffer, count, datatype, root, stream
-                comm.bcast(memptr.ptr, num_elements, cupy.cuda.nccl.NCCL_FLOAT16, 0, 0)
                 
-                cupy.cuda.Device(cuda_allocator.device.value).synchronize()
+                if mode == 1 and scatter_length > 0:
+                    # SCATTER mode: receive our specific shard slice
+                    shard_elements = scatter_length // 2  # fp16
+                    recv_ptr = memptr.ptr + scatter_offset
+                    logger.info(f"Target SCATTER recv: {scatter_length} bytes at offset {scatter_offset} "
+                                f"(rank {rank}/{world_size})")
+                    comm.recv(recv_ptr, shard_elements, cupy.cuda.nccl.NCCL_FLOAT16, 0, 0)
+                else:
+                    # BROADCAST mode: receive full buffer
+                    num_elements = size_bytes // 2  # float16
+                    logger.info(f"Target BROADCAST recv (Rank {rank}/{world_size})")
+                    comm.bcast(memptr.ptr, num_elements, cupy.cuda.nccl.NCCL_FLOAT16, 0, 0)
+                
+                cupy.cuda.Device(info["gpu_id"]).synchronize()
             try:
                 comm.destroy()
             except AttributeError:
@@ -232,8 +278,9 @@ def handle_target_connection(conn, addr):
             end_time = time.time()
             
             duration = end_time - start_time
-            bandwidth_gbps = (size_bytes / (1024**3)) / duration if duration > 0 else 0
-            logger.info(f"Target NCCL recv complete in {duration:.4f}s. Bandwidth: {bandwidth_gbps:.2f} GB/s")
+            recv_bytes = scatter_length if (mode == 1 and scatter_length > 0) else size_bytes
+            bandwidth_gbps = (recv_bytes / (1024**3)) / duration if duration > 0 else 0
+            logger.info(f"Target NCCL {mode_str} recv complete in {duration:.4f}s. Bandwidth: {bandwidth_gbps:.2f} GB/s")
             
             # Notify all local consumers that rely on this buffer
             notify_sockets = info.get("notify_sockets", [])
@@ -416,14 +463,25 @@ def notify_server(sock_path: str, buffer_id: str):
 
 class NodeService(wpi_pb2_grpc.NodeServiceServicer):
     def NodeStageWeight(self, request, context):
-        logger.info(f"NodeStageWeight called for claim: {request.claim_id}, buffer: {request.buffer_id}")
+        # Determine effective buffer_id: use shard-scoped ID if sharding is active
+        shard_index = getattr(request, 'shard_index', -1)
+        total_shards = getattr(request, 'total_shards', 0)
+        is_sharded = shard_index >= 0 and total_shards > 0
+
+        effective_buffer_id = request.buffer_id
+        if is_sharded:
+            effective_buffer_id = f"{request.buffer_id}__shard_{shard_index}"
+
+        logger.info(f"NodeStageWeight called for claim: {request.claim_id}, "
+                    f"buffer: {request.buffer_id}, effective_id: {effective_buffer_id}"
+                    f"{f', shard: {shard_index}/{total_shards}' if is_sharded else f' (Not sharded - raw shard_index={shard_index}, raw_total={total_shards})'}")
         
         try:
-            KNOWN_CLAIMS[request.claim_id] = request.buffer_id
+            KNOWN_CLAIMS[request.claim_id] = effective_buffer_id
             
-            if request.buffer_id in ALLOCATED_BUFFERS:
-                logger.info(f"Buffer {request.buffer_id} is already staged. Incrementing refcount.")
-                ALLOCATED_BUFFERS[request.buffer_id]["ref_count"] += 1
+            if effective_buffer_id in ALLOCATED_BUFFERS:
+                logger.info(f"Buffer {effective_buffer_id} is already staged. Incrementing refcount.")
+                ALLOCATED_BUFFERS[effective_buffer_id]["ref_count"] += 1
                 return wpi_pb2.NodeStageWeightResponse()
 
             if not os.path.exists(SOCKET_DIR):
@@ -435,18 +493,27 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
             
             if not weight_size_bytes or weight_size_bytes == 0:
                 # Fallback to 10GB if the operator didn't specify
-                logger.warning(f"No size_bytes provided by Operator for {request.buffer_id}, falling back to 10GiB")
+                logger.warning(f"No size_bytes provided by Operator for {effective_buffer_id}, falling back to 10GiB")
                 weight_size_bytes = 10 * 1024 * 1024 * 1024
 
             if cuda_allocator:
-                logger.info(f"Setting CUDA context in current thread...")
-                cuda_allocator.libcuda.cuCtxSetCurrent(cuda_allocator.ctx)
+                gpu_id = 0
+                if is_sharded:
+                    try:
+                        num_gpus = cupy.cuda.runtime.getDeviceCount()
+                        gpu_id = shard_index % num_gpus
+                    except Exception:
+                        pass
+                
+                logger.info(f"Setting CUDA context in current thread for GPU {gpu_id}...")
+                gpu_ctx = cuda_allocator.get_or_create_context(gpu_id)
+                cuda_allocator.libcuda.cuCtxSetCurrent(gpu_ctx)
 
-                logger.info(f"Using CUDA to allocate {weight_size_bytes} bytes...")
-                fd, handle, device_ptr = cuda_allocator.allocate_and_export(weight_size_bytes)
+                logger.info(f"Using CUDA to allocate {weight_size_bytes} bytes for {effective_buffer_id} on GPU {gpu_id}...")
+                fd, handle, device_ptr = cuda_allocator.allocate_and_export(weight_size_bytes, gpu_id)
                 logger.info(f"CUDA alloc successful. Exported FD: {fd}, handle: {handle}, mapped device_ptr: {device_ptr}")
                 
-                ALLOCATED_BUFFERS[request.buffer_id] = {
+                ALLOCATED_BUFFERS[effective_buffer_id] = {
                     "device_ptr": device_ptr,
                     "size_bytes": weight_size_bytes,
                     "source_path": source_path,
@@ -454,7 +521,10 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
                     "fd": fd,
                     "notify_sockets": [],
                     "ref_count": 1,
-                    "gpu_id": 0
+                    "gpu_id": gpu_id,
+                    "shard_index": shard_index if is_sharded else -1,
+                    "total_shards": total_shards if is_sharded else 0,
+                    "parent_buffer": request.buffer_id,
                 }
                 
                 if source_path:
@@ -510,16 +580,16 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
                 context.abort(grpc.StatusCode.UNAVAILABLE, msg)
                 return wpi_pb2.NodeStageWeightResponse()
             
-            # Start background FD-passing server
-            sock_path = os.path.join(SOCKET_DIR, f"{request.buffer_id}.sock")
-            logger.info(f"Starting FD passing server for buffer {request.buffer_id}")
-            t = threading.Thread(target=pass_fd_server, args=(sock_path, request.buffer_id), daemon=True)
+            # Start background FD-passing server using effective (shard-scoped) buffer ID
+            sock_path = os.path.join(SOCKET_DIR, f"{effective_buffer_id}.sock")
+            logger.info(f"Starting FD passing server for buffer {effective_buffer_id}")
+            t = threading.Thread(target=pass_fd_server, args=(sock_path, effective_buffer_id), daemon=True)
             t.start()
             
             # Start background notify server
-            notify_sock_path = os.path.join(SOCKET_DIR, f"{request.buffer_id}_notify.sock")
-            ALLOCATED_BUFFERS[request.buffer_id]["notify_sock_path"] = notify_sock_path
-            t_notify = threading.Thread(target=notify_server, args=(notify_sock_path, request.buffer_id), daemon=True)
+            notify_sock_path = os.path.join(SOCKET_DIR, f"{effective_buffer_id}_notify.sock")
+            ALLOCATED_BUFFERS[effective_buffer_id]["notify_sock_path"] = notify_sock_path
+            t_notify = threading.Thread(target=notify_server, args=(notify_sock_path, effective_buffer_id), daemon=True)
             t_notify.start()
 
             return wpi_pb2.NodeStageWeightResponse()
@@ -590,7 +660,9 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
 
     def NodePropagate(self, request, context):
         targets_str = ", ".join(request.target_node_ids)
-        logger.info(f"NodePropagate called for buffer: {request.buffer_id} to [{targets_str}]")
+        propagate_mode = getattr(request, 'mode', 0)  # 0=BROADCAST, 1=SCATTER
+        mode_str = "SCATTER" if propagate_mode == 1 else "BROADCAST"
+        logger.info(f"NodePropagate called for buffer: {request.buffer_id} to [{targets_str}] mode={mode_str}")
         
         try:
             if request.buffer_id not in ALLOCATED_BUFFERS:
@@ -603,6 +675,12 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
             device_ptr = info["device_ptr"]
             size_bytes = info["size_bytes"]
             num_elements = size_bytes // 2
+            
+            # Phase 1: Pre-update signal to LOCAL consumers on source node.
+            # Source node consumers share the same VRAM buffer, so they need
+            # to know weights are about to change (e.g., flush KV cache).
+            # Target nodes get their signal in handle_target_connection().
+            send_pre_update_signal(request.buffer_id)
             
             nccl_id_bytes = cupy.cuda.nccl.get_unique_id()
             
@@ -619,7 +697,20 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
                 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 s.connect((target_ip, 50052))
                 
-                msg = f"{request.buffer_id}\n{world_size}\n{rank}\n".encode('utf-8') + nccl_id_bytes
+                # Build per-target scatter metadata if in SCATTER mode
+                scatter_meta = "0,0"  # offset,length placeholder
+                target_buffer_id = request.buffer_id
+                if propagate_mode == 1 and hasattr(request, 'shard_assignments') and request.shard_assignments:
+                    for assignment in request.shard_assignments:
+                        if assignment.target_node_id == target_ip:
+                            scatter_meta = f"{assignment.offset_bytes},{assignment.length_bytes}"
+                            if "__shard_" in request.buffer_id:
+                                base_id = request.buffer_id.split("__shard_")[0]
+                                target_buffer_id = f"{base_id}__shard_{assignment.shard_index}"
+                            break
+                
+                # Send: buffer_id\nworld_size\nrank\nmode\nscatter_meta\nnccl_id_bytes
+                msg = f"{target_buffer_id}\n{world_size}\n{rank}\n{propagate_mode}\n{scatter_meta}\n".encode('utf-8') + nccl_id_bytes
                 s.sendall(msg)
                 
                 resp = s.recv(1024)
@@ -635,13 +726,43 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
             mem = cupy.cuda.UnownedMemory(device_ptr, size_bytes, None)
             memptr = cupy.cuda.MemoryPointer(mem, 0)
             
-            with cupy.cuda.Device(cuda_allocator.device.value):
+            with cupy.cuda.Device(info["gpu_id"]):
                 comm = cupy.cuda.nccl.NcclCommunicator(world_size, nccl_id_bytes, 0)
-                logger.info(f"Source NCCL comm initialized (Rank 0/{world_size}). Starting bcast send...")
                 
                 start_time = time.time()
-                comm.bcast(memptr.ptr, num_elements, cupy.cuda.nccl.NCCL_FLOAT16, 0, 0)
-                cupy.cuda.Device(cuda_allocator.device.value).synchronize()
+                
+                if propagate_mode == 1 and hasattr(request, 'shard_assignments') and request.shard_assignments:
+                    # SCATTER mode: send different byte ranges to different targets
+                    logger.info(f"SCATTER mode: sending {len(request.shard_assignments)} shard assignments...")
+                    
+                    # Build rank map: target_node_id -> NCCL rank
+                    rank_map = {}
+                    for i, target_ip in enumerate(target_ips):
+                        rank_map[target_ip] = i + 1
+                    
+                    for assignment in request.shard_assignments:
+                        target_rank = rank_map.get(assignment.target_node_id)
+                        if target_rank is None:
+                            logger.warning(f"Shard assignment target {assignment.target_node_id} not in target list, skipping")
+                            continue
+                        
+                        offset = assignment.offset_bytes
+                        length = assignment.length_bytes
+                        shard_elements = length // 2  # fp16
+                        shard_ptr = memptr.ptr + offset
+                        
+                        logger.info(f"  Shard {assignment.shard_index}: sending {length} bytes "
+                                    f"(offset={offset}) to rank {target_rank} ({assignment.target_node_id})")
+                        comm.send(shard_ptr, shard_elements, cupy.cuda.nccl.NCCL_FLOAT16, target_rank, 0)
+                    
+                    cupy.cuda.Device(info["gpu_id"]).synchronize()
+                    logger.info(f"SCATTER: All shard sends completed.")
+                else:
+                    # BROADCAST mode (default): all targets get the same data
+                    logger.info(f"BROADCAST mode: sending full buffer to all {num_targets} targets...")
+                    comm.bcast(memptr.ptr, num_elements, cupy.cuda.nccl.NCCL_FLOAT16, 0, 0)
+                    cupy.cuda.Device(info["gpu_id"]).synchronize()
+                
             try:
                 comm.destroy()
             except AttributeError:
@@ -651,7 +772,7 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
             duration = end_time - start_time
             # Total data moved out of this node is size_bytes, the switch fabric replicates it
             bandwidth_gbps = (size_bytes / (1024**3)) / duration if duration > 0 else 0
-            logger.info(f"Source NCCL bcast complete in {duration:.4f}s. Bandwidth: {bandwidth_gbps:.2f} GB/s")
+            logger.info(f"Source NCCL {mode_str} complete in {duration:.4f}s. Bandwidth: {bandwidth_gbps:.2f} GB/s")
             
             for s in sockets:
                 s.close()

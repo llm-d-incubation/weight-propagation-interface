@@ -12,9 +12,9 @@ Check out the [WPI Demo Video](https://youtu.be/I3bRaShPILE) to see the system i
 
 WPI consists of three main architectural layers:
 
-1.  **Custom Resource Definitions (CRDs):** Define logical blocks of weights (`WeightBuffer`) and how workloads bind to them (`WeightClaim`).
-2.  **WPI Operator (The Brain):** A Kubernetes controller that reconciles the desired distribution of weights with the cluster's physical topology.
-3.  **WPI Driver / Node Agent (The Mover):** A privileged daemonset running on accelerator nodes that executes hardware-specific commands (CUDA IPC, NCCL) to allocate, share, and transmit memory.
+1.  **Custom Resource Definitions (CRDs):** Define logical blocks of weights (`WeightBuffer`) and how workloads bind to them (`WeightClaim`). Supports automatic model sharding for tensor, pipeline, and expert parallelism.
+2.  **WPI Operator (The Brain):** A Kubernetes controller that reconciles the desired distribution of weights with the cluster's physical topology, including shard discovery and per-claim shard assignment.
+3.  **WPI Driver / Node Agent (The Mover):** A privileged daemonset running on accelerator nodes that executes hardware-specific commands (CUDA IPC, NCCL) to allocate, share, and transmit memory. Supports both broadcast (1-to-N identical) and scatter (1-to-N sharded) propagation modes.
 4.  **Consumer (The Workload):** The ML framework (e.g., PyTorch, vLLM) that natively binds to the shared weight memory without allocating a duplicate copy.
 
 ## 📂 Repository Structure
