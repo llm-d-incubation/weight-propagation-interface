@@ -76,6 +76,8 @@ spec:
           mountPath: /run/wpi/sockets
         - name: nvidia-lib
           mountPath: /usr/local/nvidia/lib64
+        - name: dshm
+          mountPath: /dev/shm
         - name: host-dev
           mountPath: /dev
         - name: wpi-code-vol
@@ -138,6 +140,10 @@ spec:
         hostPath:
           path: /home/kubernetes/bin/nvidia/lib64
           type: DirectoryOrCreate
+      - name: dshm
+        emptyDir:
+          medium: Memory
+          sizeLimit: 1Gi
       - name: host-dev
         hostPath:
           path: /dev

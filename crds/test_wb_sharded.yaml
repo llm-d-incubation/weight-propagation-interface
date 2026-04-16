@@ -1,0 +1,10 @@
+apiVersion: wpi.sig.k8s.io/v1alpha1
+kind: WeightBuffer
+metadata:
+  name: wb-test-sharded
+  namespace: wpi-system
+spec:
+  capacity: "600Gi"
+  sharding:
+    strategy: TensorParallel
+    numShards: 8

@@ -234,4 +234,3 @@ func (r *WeightBufferReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("weightbuffer").
 		Complete(r)
 }
-

@@ -30,8 +30,8 @@ def test_scatter_propagate():
     # If there are >1 targets, let's say node 1 gets shard 0, node 2 gets shard 1.
     target_ip, target_node = target_ips_and_nodes[0]
     
-    size_bytes = 150 * 1024 * 1024 * 1024 # 150 GB
-    shard_size = size_bytes // 2 # 75 GB
+    size_bytes = 600 * 1024 * 1024 * 1024 # 600 GB
+    shard_size = size_bytes // 8 # 75 GB
     
     print(f"\n--- benchmark configuration ---")
     print(f"WeightBuffer: {buffer_id}")
@@ -125,17 +125,17 @@ spec:
         time.sleep(3)
 
         print(f"\n2b. Triggering NodePropagate (SCATTER mode)...")
-        # In scatter mode, we assign shard 1 (offset 1GB) to target_ip
+        # In scatter mode, we assign shard 1 (offset 0 because Source only holds shard 0 locally)
         assignment = wpi_pb2.ShardAssignment(
             target_node_id=target_ip,
             shard_index=1,
-            offset_bytes=shard_size,
+            offset_bytes=0, # Local offset in Source buffer
             length_bytes=shard_size,
             target_gpu_id=0
         )
         
         request_propagate = wpi_pb2.NodePropagateRequest(
-            buffer_id=buffer_id,
+            buffer_id=f"{buffer_id}__shard_0",
             target_node_ids=[target_ip],
             mode=1, # SCATTER mode
             shard_assignments=[assignment]

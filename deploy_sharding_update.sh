@@ -40,7 +40,8 @@ if [ "$1" = "--rebuild" ]; then
     echo "3. Rebuilding Docker image..."
     
     # Try the build_plugin.sh registry first, fall back to daemonset registry
-    REGISTRY="us-west1-docker.pkg.dev/gke-shared-ai-dev/rl-weight-transfer/wpi-driver:latest"
+    # REGISTRY="us-west1-docker.pkg.dev/gke-shared-ai-dev/rl-weight-transfer/wpi-driver:latest"
+    REGISTRY="us-central1-docker.pkg.dev/yangspirit-gke-dev/rl-weight-transfer/wpi-driver:latest"
     
     docker build --platform linux/amd64 -f "${WPI_DIR}/driver/Dockerfile" -t "${REGISTRY}" "${WPI_DIR}"
     docker push "${REGISTRY}"

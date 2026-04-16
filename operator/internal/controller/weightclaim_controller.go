@@ -198,9 +198,9 @@ func (r *WeightClaimReconciler) resolveShardIndex(
 		// Auto-assignment: try to extract index from pod rank annotations.
 		// Check common rank annotations from Job frameworks.
 		rankAnnotations := []string{
-			"wpi.sig.k8s.io/shard-index",           // WPI-specific annotation
+			"wpi.sig.k8s.io/shard-index",               // WPI-specific annotation
 			"batch.kubernetes.io/job-completion-index", // K8s Job indexed completions
-			"ray.io/rank",                             // Ray
+			"ray.io/rank", // Ray
 		}
 		found := false
 		for _, annotation := range rankAnnotations {
@@ -251,4 +251,3 @@ func (r *WeightClaimReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("weightclaim").
 		Complete(r)
 }
-

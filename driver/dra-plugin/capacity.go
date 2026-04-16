@@ -16,35 +16,33 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-// getTotalVRAM queries nvidia-smi for total GPU memory in bytes.
-// If it fails, it returns an error.
-func getTotalVRAM() (uint64, error) {
+// getTotalVRAM queries nvidia-smi for total GPU memory in bytes, returning bytes and gpu count.
+func getTotalVRAM() (uint64, int, error) {
 	cmd := exec.Command("nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader")
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
-		return 0, fmt.Errorf("nvidia-smi error: %v", err)
+		return 0, 0, fmt.Errorf("nvidia-smi error: %v", err)
 	}
 
-	// Output format: "81920 MiB\n", we might have multiple GPUs, grab the first one
 	output := strings.TrimSpace(out.String())
 	lines := strings.Split(output, "\n")
-	if len(lines) == 0 || lines[0] == "" {
-		return 0, fmt.Errorf("empty output from nvidia-smi")
+	numGPUs := len(lines)
+	if numGPUs == 0 || lines[0] == "" {
+		return 0, 0, fmt.Errorf("empty output from nvidia-smi")
 	}
 
 	parts := strings.Fields(lines[0])
 	if len(parts) == 0 {
-		return 0, fmt.Errorf("unexpected nvidia-smi output: %s", lines[0])
+		return 0, 0, fmt.Errorf("unexpected nvidia-smi output: %s", lines[0])
 	}
 
 	val, err := strconv.ParseUint(parts[0], 10, 64)
 	if err != nil {
-		return 0, fmt.Errorf("failed to parse memory value '%s': %v", parts[0], err)
+		return 0, 0, fmt.Errorf("failed to parse memory value '%s': %v", parts[0], err)
 	}
 
-	// Standard nvidia-smi output in MiB
-	return val * 1024 * 1024, nil
+	return val * 1024 * 1024, numGPUs, nil
 }
 
 // publishResourceSliceLoop continuously publishes the node's ResourceSlice.
@@ -60,10 +58,22 @@ func publishResourceSliceLoop(ctx context.Context, dynClient dynamic.Interface, 
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			vramBytes, err := getTotalVRAM()
+			vramBytes, numGPUs, err := getTotalVRAM()
 			if err != nil {
 				log.Printf("Failed to get VRAM bounds, skipping ResourceSlice update: %v", err)
 				continue
+			}
+
+			devices := []interface{}{}
+			for i := 0; i < numGPUs; i++ {
+				devices = append(devices, map[string]interface{}{
+					"name": fmt.Sprintf("wpi-device-%d", i),
+					"capacity": map[string]interface{}{
+						"memory": map[string]interface{}{
+							"value": fmt.Sprintf("%d", vramBytes),
+						},
+					},
+				})
 			}
 
 			// Construct unstructured ResourceSlice
@@ -82,16 +92,7 @@ func publishResourceSliceLoop(ctx context.Context, dynClient dynamic.Interface, 
 							"generation":         int64(1),
 							"resourceSliceCount": int64(1),
 						},
-						"devices": []interface{}{
-							map[string]interface{}{
-								"name": "wpi-device-0",
-								"capacity": map[string]interface{}{
-									"memory": map[string]interface{}{
-										"value": fmt.Sprintf("%d", vramBytes),
-									},
-								},
-							},
-						},
+						"devices": devices,
 					},
 				},
 			}

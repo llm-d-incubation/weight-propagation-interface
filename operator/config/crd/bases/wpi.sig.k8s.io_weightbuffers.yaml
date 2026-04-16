@@ -44,9 +44,62 @@ spec:
                 description: Capacity is the total size of the weight buffer (e.g.,
                   "10Gi").
                 type: string
+              sharding:
+                description: |-
+                  Sharding defines how this buffer is partitioned across GPUs.
+                  If nil, the buffer is treated as a single monolithic block.
+                properties:
+                  filePattern:
+                    description: |-
+                      FilePattern is a glob pattern for auto-discovering shard files
+                      within SourcePath (e.g., "model-*-of-*.safetensors").
+                      Mutually exclusive with ShardFiles.
+                    type: string
+                  numShards:
+                    description: NumShards is the total number of shards the model
+                      is split into.
+                    type: integer
+                  shardFiles:
+                    description: |-
+                      ShardFiles is an explicit mapping of shard index to file.
+                      If omitted, the operator uses FilePattern for auto-discovery.
+                    items:
+                      description: ShardFile maps a shard index to its source file
+                        on shared storage.
+                      properties:
+                        index:
+                          description: Index is the shard number (0-indexed).
+                          type: integer
+                        path:
+                          description: Path to the shard file on shared storage.
+                          type: string
+                        sizeBytes:
+                          description: SizeBytes is the size of this specific shard
+                            in bytes.
+                          format: int64
+                          type: integer
+                      required:
+                      - index
+                      - path
+                      type: object
+                    type: array
+                  strategy:
+                    description: Strategy is the parallelism pattern used to split
+                      the model.
+                    enum:
+                    - TensorParallel
+                    - ExpertParallel
+                    - PipelineParallel
+                    - Custom
+                    type: string
+                required:
+                - numShards
+                - strategy
+                type: object
               sourcePath:
-                description: SourcePath is the URI or local path to load the weights
-                  from
+                description: |-
+                  SourcePath is the URI or local path to load the weights from.
+                  For sharded models, this is the directory containing shard files.
                 type: string
             type: object
           status:
@@ -113,6 +166,34 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              discoveredShards:
+                description: |-
+                  DiscoveredShards contains the resolved metadata for each shard
+                  after the operator has performed shard discovery.
+                items:
+                  description: DiscoveredShard represents a resolved shard after discovery.
+                  properties:
+                    index:
+                      description: Index is the shard number (0-indexed).
+                      type: integer
+                    path:
+                      description: Path is the resolved path to the shard file.
+                      type: string
+                    sizeBytes:
+                      description: SizeBytes is the resolved size of this shard.
+                      format: int64
+                      type: integer
+                  required:
+                  - index
+                  - path
+                  - sizeBytes
+                  type: object
+                type: array
+              totalShards:
+                description: |-
+                  TotalShards is the resolved total number of shards.
+                  0 or absent means the buffer is not sharded.
+                type: integer
             type: object
         required:
         - spec

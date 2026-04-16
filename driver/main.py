@@ -159,6 +159,7 @@ FILE_SIZE_GIB = 10
 
 ALLOCATED_BUFFERS = {}  # mapping: buffer_id -> {"device_ptr": device_ptr, "size_bytes": size_bytes, "ref_count": int}
 KNOWN_CLAIMS = {}       # mapping: claim_id -> buffer_id
+nccl_init_lock = threading.Lock()
 
 def start_nccl_target_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -252,8 +253,9 @@ def handle_target_connection(conn, addr):
             mem = cupy.cuda.UnownedMemory(device_ptr, size_bytes, None)
             memptr = cupy.cuda.MemoryPointer(mem, 0)
             
-            with cupy.cuda.Device(cuda_allocator.device.value):
-                comm = cupy.cuda.nccl.NcclCommunicator(world_size, nccl_id_bytes, rank)
+            with cupy.cuda.Device(info["gpu_id"]):
+                with nccl_init_lock:
+                    comm = cupy.cuda.nccl.NcclCommunicator(world_size, nccl_id_bytes, rank)
                 
                 start_time = time.time()
                 
@@ -270,7 +272,7 @@ def handle_target_connection(conn, addr):
                     logger.info(f"Target BROADCAST recv (Rank {rank}/{world_size})")
                     comm.bcast(memptr.ptr, num_elements, cupy.cuda.nccl.NCCL_FLOAT16, 0, 0)
                 
-                cupy.cuda.Device(cuda_allocator.device.value).synchronize()
+                cupy.cuda.Device(info["gpu_id"]).synchronize()
             try:
                 comm.destroy()
             except AttributeError:
@@ -497,11 +499,20 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
                 weight_size_bytes = 10 * 1024 * 1024 * 1024
 
             if cuda_allocator:
-                logger.info(f"Setting CUDA context in current thread...")
-                cuda_allocator.libcuda.cuCtxSetCurrent(cuda_allocator.ctx)
+                gpu_id = 0
+                if is_sharded:
+                    try:
+                        num_gpus = cupy.cuda.runtime.getDeviceCount()
+                        gpu_id = shard_index % num_gpus
+                    except Exception:
+                        pass
+                
+                logger.info(f"Setting CUDA context in current thread for GPU {gpu_id}...")
+                gpu_ctx = cuda_allocator.get_or_create_context(gpu_id)
+                cuda_allocator.libcuda.cuCtxSetCurrent(gpu_ctx)
 
-                logger.info(f"Using CUDA to allocate {weight_size_bytes} bytes for {effective_buffer_id}...")
-                fd, handle, device_ptr = cuda_allocator.allocate_and_export(weight_size_bytes)
+                logger.info(f"Using CUDA to allocate {weight_size_bytes} bytes for {effective_buffer_id} on GPU {gpu_id}...")
+                fd, handle, device_ptr = cuda_allocator.allocate_and_export(weight_size_bytes, gpu_id)
                 logger.info(f"CUDA alloc successful. Exported FD: {fd}, handle: {handle}, mapped device_ptr: {device_ptr}")
                 
                 ALLOCATED_BUFFERS[effective_buffer_id] = {
@@ -512,7 +523,7 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
                     "fd": fd,
                     "notify_sockets": [],
                     "ref_count": 1,
-                    "gpu_id": 0,
+                    "gpu_id": gpu_id,
                     "shard_index": shard_index if is_sharded else -1,
                     "total_shards": total_shards if is_sharded else 0,
                     "parent_buffer": request.buffer_id,
@@ -690,14 +701,18 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
                 
                 # Build per-target scatter metadata if in SCATTER mode
                 scatter_meta = "0,0"  # offset,length placeholder
+                target_buffer_id = request.buffer_id
                 if propagate_mode == 1 and hasattr(request, 'shard_assignments') and request.shard_assignments:
                     for assignment in request.shard_assignments:
                         if assignment.target_node_id == target_ip:
                             scatter_meta = f"{assignment.offset_bytes},{assignment.length_bytes}"
+                            if "__shard_" in request.buffer_id:
+                                base_id = request.buffer_id.split("__shard_")[0]
+                                target_buffer_id = f"{base_id}__shard_{assignment.shard_index}"
                             break
                 
                 # Send: buffer_id\nworld_size\nrank\nmode\nscatter_meta\nnccl_id_bytes
-                msg = f"{request.buffer_id}\n{world_size}\n{rank}\n{propagate_mode}\n{scatter_meta}\n".encode('utf-8') + nccl_id_bytes
+                msg = f"{target_buffer_id}\n{world_size}\n{rank}\n{propagate_mode}\n{scatter_meta}\n".encode('utf-8') + nccl_id_bytes
                 s.sendall(msg)
                 
                 resp = s.recv(1024)
@@ -713,8 +728,9 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
             mem = cupy.cuda.UnownedMemory(device_ptr, size_bytes, None)
             memptr = cupy.cuda.MemoryPointer(mem, 0)
             
-            with cupy.cuda.Device(cuda_allocator.device.value):
-                comm = cupy.cuda.nccl.NcclCommunicator(world_size, nccl_id_bytes, 0)
+            with cupy.cuda.Device(info["gpu_id"]):
+                with nccl_init_lock:
+                    comm = cupy.cuda.nccl.NcclCommunicator(world_size, nccl_id_bytes, 0)
                 
                 start_time = time.time()
                 
@@ -727,8 +743,6 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
                     for i, target_ip in enumerate(target_ips):
                         rank_map[target_ip] = i + 1
                     
-                    # Use NCCL group for concurrent sends
-                    cupy.cuda.nccl.groupStart()
                     for assignment in request.shard_assignments:
                         target_rank = rank_map.get(assignment.target_node_id)
                         if target_rank is None:
@@ -743,15 +757,14 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
                         logger.info(f"  Shard {assignment.shard_index}: sending {length} bytes "
                                     f"(offset={offset}) to rank {target_rank} ({assignment.target_node_id})")
                         comm.send(shard_ptr, shard_elements, cupy.cuda.nccl.NCCL_FLOAT16, target_rank, 0)
-                    cupy.cuda.nccl.groupEnd()
                     
-                    cupy.cuda.Device(cuda_allocator.device.value).synchronize()
+                    cupy.cuda.Device(info["gpu_id"]).synchronize()
                     logger.info(f"SCATTER: All shard sends completed.")
                 else:
                     # BROADCAST mode (default): all targets get the same data
                     logger.info(f"BROADCAST mode: sending full buffer to all {num_targets} targets...")
                     comm.bcast(memptr.ptr, num_elements, cupy.cuda.nccl.NCCL_FLOAT16, 0, 0)
-                    cupy.cuda.Device(cuda_allocator.device.value).synchronize()
+                    cupy.cuda.Device(info["gpu_id"]).synchronize()
                 
             try:
                 comm.destroy()

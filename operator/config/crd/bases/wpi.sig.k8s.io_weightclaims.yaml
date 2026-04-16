@@ -40,6 +40,12 @@ spec:
           spec:
             description: spec defines the desired state of WeightClaim
             properties:
+              shardIndex:
+                description: |-
+                  ShardIndex specifies which shard of a sharded WeightBuffer this claim
+                  is requesting. If the WeightBuffer has sharding and this is not set,
+                  the operator auto-assigns based on the pod's rank annotation.
+                type: integer
               weightBufferName:
                 description: WeightBufferName is the name of the WeightBuffer this
                   claim refers to.
@@ -50,6 +56,11 @@ spec:
           status:
             description: status defines the observed state of WeightClaim
             properties:
+              assignedShardIndex:
+                description: |-
+                  AssignedShardIndex is the operator-resolved shard index for this claim.
+                  Set after validation, whether from explicit spec or auto-assignment.
+                type: integer
               conditions:
                 description: Conditions represent the current state of the WeightClaim
                   resource.

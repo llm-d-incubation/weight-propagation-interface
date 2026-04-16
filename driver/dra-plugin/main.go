@@ -168,7 +168,7 @@ func (p *wpiPlugin) NodePrepareResources(ctx context.Context, req *drav1.NodePre
 				}
 				log.Printf("Found WeightBuffer %s: SourcePath=%s, Effective SizeBytes=%d", bufferName, sourcePath, sizeBytes)
 
-				totalVRAM, vramErr := getTotalVRAM()
+				totalVRAM, _, vramErr := getTotalVRAM()
 				if vramErr == nil && sizeBytes > totalVRAM {
 					errStr := fmt.Sprintf("requested shard capacity %d bytes exceeds total node VRAM %d bytes", sizeBytes, totalVRAM)
 					log.Printf(errStr)
