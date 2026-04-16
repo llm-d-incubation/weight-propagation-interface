@@ -159,7 +159,6 @@ FILE_SIZE_GIB = 10
 
 ALLOCATED_BUFFERS = {}  # mapping: buffer_id -> {"device_ptr": device_ptr, "size_bytes": size_bytes, "ref_count": int}
 KNOWN_CLAIMS = {}       # mapping: claim_id -> buffer_id
-nccl_init_lock = threading.Lock()
 
 def start_nccl_target_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -254,8 +253,7 @@ def handle_target_connection(conn, addr):
             memptr = cupy.cuda.MemoryPointer(mem, 0)
             
             with cupy.cuda.Device(info["gpu_id"]):
-                with nccl_init_lock:
-                    comm = cupy.cuda.nccl.NcclCommunicator(world_size, nccl_id_bytes, rank)
+                comm = cupy.cuda.nccl.NcclCommunicator(world_size, nccl_id_bytes, rank)
                 
                 start_time = time.time()
                 
@@ -729,8 +727,7 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
             memptr = cupy.cuda.MemoryPointer(mem, 0)
             
             with cupy.cuda.Device(info["gpu_id"]):
-                with nccl_init_lock:
-                    comm = cupy.cuda.nccl.NcclCommunicator(world_size, nccl_id_bytes, 0)
+                comm = cupy.cuda.nccl.NcclCommunicator(world_size, nccl_id_bytes, 0)
                 
                 start_time = time.time()
                 
