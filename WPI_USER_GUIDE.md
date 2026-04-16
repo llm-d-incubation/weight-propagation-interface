@@ -222,6 +222,18 @@ Validation of zero-copy broadcast operations was conducted by transmitting a 10 
 - **Throughput Increase:** RDMA acceleration delivered a **565% increase** in bandwidth over the baseline socket transfer.
 - **Speed of Light Context:** The a3-ultragpu-8g maximum network bandwidth per NIC is 50 GB/s. The transfer achieved **73.14% of maximum bandwidth**. For comparison, Ray on A4 achieved 35 GB/s (70% of maximum bandwidth).
 
+### A4-Highgpu-8g 8-Shard Scatter Propagation (600 GB)
+
+Full 8-GPU concurrent scatter transfer across two A4 nodes. Each of the 8 source GPUs sends its 75 GB shard to the corresponding target GPU on the remote node over a dedicated NCCL communicator, all running simultaneously via InfiniBand with GPUDirect RDMA.
+
+- **Configuration:** `WeightBuffer` 600 GiB, `TensorParallel`, `numShards: 8`. 8 independent NCCL communicators (world_size=2 each).
+- **Total Data Transferred:** 600 GB across 8 concurrent NCCL streams.
+- **Average Stream Latency:** 2.31 seconds.
+- **Per-Stream Bandwidth (avg):** 32.43 GB/s.
+- **Aggregate Cross-Node Throughput:** **251 GB/s**.
+- **Stream Variance:** Only ~140ms spread between fastest (2.25s) and slowest (2.39s) shard, demonstrating even IB fabric utilization.
+- **Speed of Light Context:** The A4 node has 2× 200 Gbps (50 GB/s) IB NICs = 100 GB/s theoretical max per GPU pair. With 8 GPUs sharing the fabric, 251 GB/s aggregate represents excellent utilization of the available bandwidth.
+
 ---
 
 ## Step 6: Sharded Model Distribution

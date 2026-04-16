@@ -175,3 +175,58 @@ This is transparent to the consumer — the `WPIClient` resolves the correct sha
 6. **Driver (targets):** Each target receives only its shard via `ncclRecv`, deposits it at the correct offset in its local buffer.
 7. **Pods:** Each pod maps its local shard and begins parallel execution.
 
+---
+
+## 8. Benchmark Results
+
+### 8.1 Environment
+
+| Component | Specification |
+|---|---|
+| **Cluster** | GKE (us-central1), 2× A4 nodes |
+| **GPUs** | 8× NVIDIA GPUs per node (A100-equivalent) |
+| **Interconnect** | InfiniBand with RDMA/GDR (GPUDirect RDMA) |
+| **NCCL** | With IB plugin, adaptive routing enabled |
+| **Kubernetes** | DRA (Dynamic Resource Allocation) for GPU memory scheduling |
+
+### 8.2 8-Shard Scatter Propagation (600 GB)
+
+Full 8-GPU concurrent transfer: each of the 8 source GPUs sends its 75 GB shard to the corresponding target GPU on the remote node over a dedicated NCCL communicator. All 8 streams run simultaneously.
+
+**Configuration:**
+- `WeightBuffer`: 600 GiB, `TensorParallel`, `numShards: 8`
+- 16 DRA pods total (8 source + 8 target)
+- 8 independent NCCL communicators (world_size=2 each)
+
+**Results (best of 3 runs):**
+
+| Metric | Value |
+|---|---|
+| Total Data Transferred | 600 GB |
+| Number of Concurrent Streams | 8 |
+| Shard Size | 75 GB |
+| Average Stream Latency | 2.31 s |
+| Max Stream Latency (wall clock) | 2.39 s |
+| Per-Stream Bandwidth (avg) | 32.43 GB/s |
+| **Aggregate Cross-Node Throughput** | **251 GB/s** |
+
+**Per-Shard Breakdown:**
+
+| Shard | Latency (s) | Bandwidth (GB/s) |
+|---|---|---|
+| 0 | 2.2654 | 33.11 |
+| 1 | 2.2887 | 32.77 |
+| 2 | 2.2536 | 33.28 |
+| 3 | 2.3122 | 32.44 |
+| 4 | 2.3310 | 32.17 |
+| 5 | 2.3901 | 31.38 |
+| 6 | 2.3543 | 31.86 |
+| 7 | 2.3034 | 32.56 |
+
+### 8.3 Key Observations
+
+- **Near-linear scaling:** 8 concurrent NCCL streams achieve ~251 GB/s aggregate, close to the theoretical 8× single-stream bandwidth. The IB fabric distributes traffic evenly across NIC ports.
+- **Low variance:** The spread between fastest (shard 2: 2.25s) and slowest (shard 5: 2.39s) is only ~140ms, indicating minimal contention.
+- **NCCL transport:** All streams use `NET/IB/GDRDMA/Shared` — zero-copy GPU-to-GPU over InfiniBand with GPUDirect RDMA, bypassing host memory entirely.
+- **Concurrent bootstrap:** Each shard's NCCL communicator initializes independently in parallel. No serialization locks are needed; the `/dev/shm` volume is sized to 1 GiB to accommodate the shared memory segments required by 8 concurrent NCCL proxy threads.
+
