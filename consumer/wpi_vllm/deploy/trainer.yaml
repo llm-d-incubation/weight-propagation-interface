@@ -20,16 +20,16 @@ spec:
   restartPolicy: Never
   containers:
   - name: trainer
-    image: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel
+    image: vllm-wpi:latest
     command:
     - bash
     - -c
     - |
       # Install dependencies
-      pip install wpi_verl_plugin transformers requests
+      pip install wpi_client transformers requests
 
       # Install vLLM (for the WPI engine classes used by trainer_send_weights)
-      pip install vllm
+      # pip install vllm
 
       # Run the benchmark or trainer script
       # Option A: Benchmark

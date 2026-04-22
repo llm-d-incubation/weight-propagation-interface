@@ -26,14 +26,11 @@ spec:
   - operator: "Exists"
   containers:
   - name: vllm
-    image: vllm/vllm-openai:latest  # Replace with your WPI-enabled vLLM image
+    image: vllm-wpi:latest  # Replace with your WPI-enabled vLLM image
     command:
     - bash
     - -c
     - |
-      # Install WPI client (lightweight — no verl/ray dependency)
-      pip install wpi_verl_plugin
-
       # Start vLLM with WPI backend
       VLLM_SERVER_DEV_MODE=1 python -m vllm.entrypoints.openai.api_server \
         --model meta-llama/Llama-3-8B \

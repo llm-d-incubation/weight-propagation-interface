@@ -26,9 +26,9 @@ wpi_vllm/
 
 1. **WPI driver** DaemonSet running on GPU nodes (`wpi-system` namespace)
 2. **vLLM** built from the WPI-enabled fork (with `wpi_engine.py`)
-3. **`wpi_verl_plugin`** installed in the vLLM container:
+3. **`wpi_client`** installed in the vLLM container:
    ```bash
-   pip install wpi_verl_plugin   # core client only (no verl/ray dependency)
+   pip install wpi_client   # core client only (no verl/ray dependency)
    ```
 
 ## Quick Start
