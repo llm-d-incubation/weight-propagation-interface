@@ -1,0 +1,82 @@
+# Trainer pod for WPI + vLLM benchmarking.
+#
+# Runs the trainer_http.py example or bench_weight_update.py benchmark
+# on a GPU node with WPI driver access.
+#
+# Apply: kubectl apply -f trainer.yaml -n wpi-system
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: wpi-vllm-trainer
+  namespace: wpi-system
+  labels:
+    app: wpi-trainer
+spec:
+  nodeSelector:
+    cloud.google.com/gke-nodepool: a4-trainer
+  tolerations:
+  - operator: "Exists"
+  restartPolicy: Never
+  containers:
+  - name: trainer
+    image: pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel
+    command:
+    - bash
+    - -c
+    - |
+      # Install dependencies
+      pip install wpi_verl_plugin transformers requests
+
+      # Install vLLM (for the WPI engine classes used by trainer_send_weights)
+      pip install vllm
+
+      # Run the benchmark or trainer script
+      # Option A: Benchmark
+      python /app/bench_weight_update.py \
+        --vllm-url http://vllm-wpi-svc:8000 \
+        --target-nodes "${TARGET_NODE_IPS}" \
+        --model "${MODEL_NAME}" \
+        --num-iters 20 \
+        --warmup-iters 3 \
+        --output /app/results.json
+
+      # Option B: Trainer example (uncomment to use)
+      # python /app/trainer_http.py \
+      #   --vllm-url http://vllm-wpi-svc:8000 \
+      #   --target-nodes "${TARGET_NODE_IPS}" \
+      #   --model "${MODEL_NAME}" \
+      #   --num-steps 10
+    env:
+    - name: NVIDIA_VISIBLE_DEVICES
+      value: "all"
+    - name: MODEL_NAME
+      value: "meta-llama/Llama-3-8B"
+    - name: TARGET_NODE_IPS
+      value: ""  # Set this to the vLLM node's host IP
+    securityContext:
+      privileged: true
+    resources:
+      limits:
+        nvidia.com/gpu: "1"
+      requests:
+        nvidia.com/gpu: "1"
+    volumeMounts:
+    - name: wpi-sockets
+      mountPath: /run/wpi/sockets
+    - name: app-code
+      mountPath: /app
+    - name: shm
+      mountPath: /dev/shm
+  volumes:
+  - name: wpi-sockets
+    hostPath:
+      path: /run/wpi/sockets
+      type: DirectoryOrCreate
+  - name: app-code
+    configMap:
+      name: wpi-vllm-trainer-code
+  - name: shm
+    emptyDir:
+      medium: Memory
+      sizeLimit: 16Gi
