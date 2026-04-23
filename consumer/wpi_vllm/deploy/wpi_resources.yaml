@@ -9,30 +9,28 @@
 #
 # Apply: kubectl apply -f wpi_resources.yaml -n wpi-system
 
-apiVersion: wpi.google.com/v1alpha1
+apiVersion: wpi.sig.k8s.io/v1alpha1
 kind: WeightBuffer
 metadata:
   name: vllm-weight-buffer
   namespace: wpi-system
 spec:
-  sizeBytes: "21474836480"  # 20 GiB — adjust to your model size
-  bufferId: "vllm-weights"
-  retentionPolicy: Retain
+  capacity: "214748364800"  # 200 GiB — adjust to your model size
+  # bufferId: "vllm-weights"
+  # retentionPolicy: Retain
   # Optional: restrict to specific node pools
   # nodeSelector:
   #   cloud.google.com/gke-nodepool: a4-inference
 
 ---
-apiVersion: wpi.google.com/v1alpha1
+apiVersion: wpi.sig.k8s.io/v1alpha1
 kind: WeightClaim
 metadata:
   name: vllm-weight-claim
   namespace: wpi-system
 spec:
-  bufferRef:
-    name: vllm-weight-buffer
-  claimId: "vllm-weights-claim"
-  mode: ReadWrite
+  weightBufferName: vllm-weight-buffer
   # For tensor-parallel, create one claim per shard:
   # shardIndex: 0
   # totalShards: 8
+

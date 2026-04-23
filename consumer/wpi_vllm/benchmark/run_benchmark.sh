@@ -78,8 +78,21 @@ done
 
 # ── Step 5: Verify vLLM health ──────────────────────────────────────────
 echo "Step 5: Checking vLLM health..."
-curl -sf http://localhost:${VLLM_PORT}/health > /dev/null
-echo "vLLM is healthy."
+HEALTHY=false
+for i in $(seq 1 60); do
+    if curl -sf http://localhost:${VLLM_PORT}/health > /dev/null; then
+        echo "vLLM is healthy."
+        HEALTHY=true
+        break
+    fi
+    echo "Waiting for vLLM to become healthy (attempt $i)..."
+    sleep 5
+done
+
+if [ "$HEALTHY" = false ]; then
+    echo "Error: vLLM did not become healthy in time."
+    exit 1
+fi
 
 # ── Step 6: Run benchmark ──────────────────────────────────────────────
 echo ""

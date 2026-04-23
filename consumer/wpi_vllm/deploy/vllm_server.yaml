@@ -21,20 +21,21 @@ metadata:
     app: vllm-wpi
 spec:
   nodeSelector:
-    cloud.google.com/gke-nodepool: a4-inference
+    cloud.google.com/gke-nodepool: a4-pool
   tolerations:
   - operator: "Exists"
   containers:
   - name: vllm
-    image: vllm-wpi:latest  # Replace with your WPI-enabled vLLM image
+    image: us-central1-docker.pkg.dev/yangspirit-gke-dev/rl-weight-transfer/vllm-wpi:latest
     command:
     - bash
     - -c
     - |
       # Start vLLM with WPI backend
-      VLLM_SERVER_DEV_MODE=1 python -m vllm.entrypoints.openai.api_server \
-        --model meta-llama/Llama-3-8B \
+      VLLM_SERVER_DEV_MODE=1 python3 -m vllm.entrypoints.openai.api_server \
+        --model Qwen/Qwen2-7B \
         --weight-transfer-config '{"backend": "wpi"}' \
+        --tensor-parallel-size 4 \
         --gpu-memory-utilization 0.80 \
         --host 0.0.0.0 \
         --port 8000
@@ -46,13 +47,18 @@ spec:
       value: "all"
     - name: VLLM_SERVER_DEV_MODE
       value: "1"
+    - name: HF_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: hf-token-secret
+          key: token
     securityContext:
       privileged: true  # Required for CUDA VMM operations
     resources:
       limits:
-        nvidia.com/gpu: "1"  # Adjust for TP
+        nvidia.com/gpu: "4"  # Adjust for TP
       requests:
-        nvidia.com/gpu: "1"
+        nvidia.com/gpu: "4"
     volumeMounts:
     - name: wpi-sockets
       mountPath: /run/wpi/sockets
