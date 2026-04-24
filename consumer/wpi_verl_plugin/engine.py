@@ -56,7 +56,7 @@ import zmq
 
 from verl.checkpoint_engine.base import CheckpointEngine, CheckpointEngineRegistry, TensorMeta
 from verl.utils.net_utils import get_free_port, is_valid_ipv6_address
-from wpi_verl_plugin.client import WPIClient
+from wpi_client.client import WPIClient
 
 logger = logging.getLogger(__name__)
 logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))

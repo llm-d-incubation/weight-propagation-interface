@@ -3,23 +3,20 @@ requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "wpi_verl_plugin"
+name = "wpi_client"
 version = "0.1.0"
-description = "WPI checkpoint engine plugin for verl"
+description = "Core Python client for Weight Propagation Interface"
 authors = [
     { name = "Google LLC" }
 ]
 dependencies = [
     "torch",
-    "ray",
-    "pyzmq",
     "grpcio>=1.60.0",
-    "protobuf",
-    "wpi_client"
+    "protobuf"
 ]
 
 [tool.setuptools]
-packages = ["wpi_verl_plugin", "wpi_verl_plugin.proto"]
+packages = ["wpi_client", "wpi_client.proto"]
 
 [tool.setuptools.package-dir]
-wpi_verl_plugin = "."
+wpi_client = "."

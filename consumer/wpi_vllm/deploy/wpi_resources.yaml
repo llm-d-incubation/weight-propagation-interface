@@ -1,0 +1,36 @@
+# WPI resources for vLLM integration.
+#
+# Creates:
+#   1. WeightBuffer — pre-allocated VRAM buffer on the inference node
+#   2. WeightClaim  — claims the buffer for the vLLM server pod
+#
+# The buffer_id ("vllm-weights") must match what the trainer passes
+# to init_weight_transfer_engine().
+#
+# Apply: kubectl apply -f wpi_resources.yaml -n wpi-system
+
+apiVersion: wpi.sig.k8s.io/v1alpha1
+kind: WeightBuffer
+metadata:
+  name: vllm-weight-buffer
+  namespace: wpi-system
+spec:
+  capacity: "214748364800"  # 200 GiB — adjust to your model size
+  # bufferId: "vllm-weights"
+  # retentionPolicy: Retain
+  # Optional: restrict to specific node pools
+  # nodeSelector:
+  #   cloud.google.com/gke-nodepool: a4-inference
+
+---
+apiVersion: wpi.sig.k8s.io/v1alpha1
+kind: WeightClaim
+metadata:
+  name: vllm-weight-claim
+  namespace: wpi-system
+spec:
+  weightBufferName: vllm-weight-buffer
+  # For tensor-parallel, create one claim per shard:
+  # shardIndex: 0
+  # totalShards: 8
+

@@ -1,0 +1,91 @@
+# vLLM server pod with WPI weight transfer backend.
+#
+# Key configuration:
+#   - VLLM_SERVER_DEV_MODE=1 enables the RLHF API endpoints
+#   - --weight-transfer-config '{"backend": "wpi"}' selects the WPI engine
+#   - /run/wpi/sockets mounted from the host (WPI driver DaemonSet)
+#   - wpi_verl_plugin pip-installed for the WPI client library
+#
+# Prerequisites:
+#   - WPI driver DaemonSet running on the same node
+#   - WeightBuffer + WeightClaim CRDs applied (see wpi_resources.yaml)
+#
+# Apply: kubectl apply -f vllm_server.yaml -n wpi-system
+
+apiVersion: v1
+kind: Pod
+metadata:
+  name: vllm-wpi-server
+  namespace: wpi-system
+  labels:
+    app: vllm-wpi
+spec:
+  nodeSelector:
+    cloud.google.com/gke-nodepool: a4-pool
+  tolerations:
+  - operator: "Exists"
+  containers:
+  - name: vllm
+    image: us-central1-docker.pkg.dev/yangspirit-gke-dev/rl-weight-transfer/vllm-wpi:latest
+    command:
+    - bash
+    - -c
+    - |
+      # Start vLLM with WPI backend
+      VLLM_SERVER_DEV_MODE=1 python3 -m vllm.entrypoints.openai.api_server \
+        --model Qwen/Qwen2-7B \
+        --weight-transfer-config '{"backend": "wpi"}' \
+        --tensor-parallel-size 4 \
+        --gpu-memory-utilization 0.80 \
+        --host 0.0.0.0 \
+        --port 8000
+    ports:
+    - containerPort: 8000
+      name: http
+    env:
+    - name: NVIDIA_VISIBLE_DEVICES
+      value: "all"
+    - name: VLLM_SERVER_DEV_MODE
+      value: "1"
+    - name: HF_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: hf-token-secret
+          key: token
+    securityContext:
+      privileged: true  # Required for CUDA VMM operations
+    resources:
+      limits:
+        nvidia.com/gpu: "4"  # Adjust for TP
+      requests:
+        nvidia.com/gpu: "4"
+    volumeMounts:
+    - name: wpi-sockets
+      mountPath: /run/wpi/sockets
+    - name: shm
+      mountPath: /dev/shm
+  volumes:
+  - name: wpi-sockets
+    hostPath:
+      path: /run/wpi/sockets
+      type: DirectoryOrCreate
+  - name: shm
+    emptyDir:
+      medium: Memory
+      sizeLimit: 16Gi
+
+---
+# Service to expose the vLLM API within the cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-wpi-svc
+  namespace: wpi-system
+spec:
+  selector:
+    app: vllm-wpi
+  ports:
+  - port: 8000
+    targetPort: 8000
+    name: http
+  type: ClusterIP
