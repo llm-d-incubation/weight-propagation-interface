@@ -17,6 +17,10 @@ Before you begin, ensure the following are set up in your cluster:
     kubectl create secret generic hf-token-secret --from-literal=token='<YOUR_HF_TOKEN>' -n wpi-system
     ```
 4.  **Model Access**: If using gated models like Llama 3, ensure the account associated with your Hugging Face token has been granted access by Meta.
+5.  **WPI Client Library**: If you need to install the client library in a custom environment, you can install it directly from GitHub:
+    ```bash
+    pip install git+https://github.com/llm-d-incubation/weight-propagation-interface.git#subdirectory=consumer/wpi_client
+    ```
 
 ## Configuration Files
 
