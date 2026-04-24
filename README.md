@@ -28,6 +28,7 @@ graph TD
 3.  🚚 **WPI Driver / Node Agent (The Mover):** A privileged daemonset running on accelerator nodes that executes hardware-specific commands (CUDA IPC, NCCL) to allocate, share, and transmit memory. Supports both broadcast (1-to-N identical) and scatter (1-to-N sharded) propagation modes.
 4.  🤖 **Consumer (The Workload):** The ML framework (e.g., PyTorch, vLLM) that natively binds to the shared weight memory without allocating a duplicate copy.
 
+
 ## 📦 Installation
 
 You can install the WPI client library directly from GitHub:
@@ -35,6 +36,7 @@ You can install the WPI client library directly from GitHub:
 ```bash
 pip install git+https://github.com/llm-d-incubation/weight-propagation-interface.git#subdirectory=consumer/wpi_client
 ```
+
 
 ## 📂 Repository Structure
 
