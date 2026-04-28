@@ -48,7 +48,7 @@ pip install git+https://github.com/llm-d-incubation/weight-propagation-interface
 
 ## 🔌 Integrations
 
-WPI seamlessly integrates with distributed ML training frameworks to eliminate storage bottlenecks during off-policy training weight synchronization:
+WPI seamlessly integrates with distributed ML training frameworks to eliminate storage bottlenecks during frequent weight synchronization between training and rollout/inference workers:
 
 - [**verl**](consumer/wpi_verl_plugin/README.md): WPI is fully integrated as a `CheckpointEngine` backend for `verl`. This enables high-throughput, zero-copy weight propagation from RL trainers to rollout workers over RDMA.
 
