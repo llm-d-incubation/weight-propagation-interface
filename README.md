@@ -60,6 +60,7 @@ WPI delivers near-line-rate weight propagation by eliminating storage overheads 
 | :--- | :--- | :--- | :--- |
 | **Multi-Node Broadcast** | ~75 GB | A3 Ultra (InfiniBand) | **37.42 GB/s** |
 | **Multi-Node Broadcast** | ~14.2 GB | Qwen2-7B (RoCE/NCCL) | **~20.4 GB/s** |
+| **Multi-Node Broadcast** | ~6 GB | Qwen2.5-3B (RoCE/NCCL) | **~15.97 GB/s** |
 
 ## 🔌 Quick Example
 
