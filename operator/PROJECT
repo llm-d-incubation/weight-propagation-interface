@@ -3,28 +3,28 @@
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
 cliVersion: 4.12.0
-domain: wpi.sig.k8s.io
+domain: wpi.io
 layout:
 - go.kubebuilder.io/v4
 projectName: operator
-repo: wpi.sig.k8s.io/operator
+repo: wpi.io/operator
 resources:
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: wpi.sig.k8s.io
-  group: wpi.sig.k8s.io
+  domain: wpi.io
+  group: wpi.io
   kind: WeightBuffer
-  path: wpi.sig.k8s.io/operator/api/v1alpha1
+  path: wpi.io/operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: wpi.sig.k8s.io
-  group: wpi.sig.k8s.io
+  domain: wpi.io
+  group: wpi.io
   kind: WeightClaim
-  path: wpi.sig.k8s.io/operator/api/v1alpha1
+  path: wpi.io/operator/api/v1alpha1
   version: v1alpha1
 version: "3"

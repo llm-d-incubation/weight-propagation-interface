@@ -1,5 +1,5 @@
 ## Append samples of your project ##
 resources:
-- wpi.sig.k8s.io_v1alpha1_weightbuffer.yaml
-- wpi.sig.k8s.io_v1alpha1_weightclaim.yaml
+- wpi.io_v1alpha1_weightbuffer.yaml
+- wpi.io_v1alpha1_weightclaim.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

@@ -1,4 +1,4 @@
-module wpi.sig.k8s.io/dra-plugin
+module wpi.io/dra-plugin
 
 go 1.25.3
 
@@ -7,10 +7,10 @@ require (
 	k8s.io/apimachinery v0.35.0
 	k8s.io/client-go v0.35.0
 	k8s.io/kubelet v0.35.0
-	wpi.sig.k8s.io/operator v0.0.0
+	wpi.io/operator v0.0.0
 )
 
-replace wpi.sig.k8s.io/operator => ../../operator
+replace wpi.io/operator => ../../operator
 
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect

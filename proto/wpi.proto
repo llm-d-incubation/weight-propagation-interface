@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package wpi.v1alpha1;
 
-option go_package = "wpi.sig.k8s.io/operator/pkg/wpi;wpi";
+option go_package = "wpi.io/operator/pkg/wpi;wpi";
 
 // 2.1 WPI Identity Service
 service IdentityService {

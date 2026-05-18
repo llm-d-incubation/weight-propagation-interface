@@ -28,7 +28,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	resourcev1 "k8s.io/api/resource/v1"
-	wpisigk8siov1alpha1 "wpi.sig.k8s.io/operator/api/v1alpha1"
+	wpisigk8siov1alpha1 "wpi.io/operator/api/v1alpha1"
 )
 
 // WeightClaimReconciler reconciles a WeightClaim object
@@ -37,9 +37,9 @@ type WeightClaimReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=wpi.sig.k8s.io,resources=weightclaims,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=wpi.sig.k8s.io,resources=weightclaims/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=wpi.sig.k8s.io,resources=weightclaims/finalizers,verbs=update
+// +kubebuilder:rbac:groups=wpi.io,resources=weightclaims,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=wpi.io,resources=weightclaims/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=wpi.io,resources=weightclaims/finalizers,verbs=update
 // +kubebuilder:rbac:groups=resource.k8s.io,resources=resourceclaims,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
@@ -198,7 +198,7 @@ func (r *WeightClaimReconciler) resolveShardIndex(
 		// Auto-assignment: try to extract index from pod rank annotations.
 		// Check common rank annotations from Job frameworks.
 		rankAnnotations := []string{
-			"wpi.sig.k8s.io/shard-index",               // WPI-specific annotation
+			"wpi.io/shard-index",               // WPI-specific annotation
 			"batch.kubernetes.io/job-completion-index", // K8s Job indexed completions
 			"ray.io/rank", // Ray
 		}
@@ -216,7 +216,7 @@ func (r *WeightClaimReconciler) resolveShardIndex(
 		if !found {
 			return shardResolution{err: fmt.Errorf(
 				"shardIndex not specified and no rank annotation found on claim %q; "+
-					"set spec.shardIndex or add annotation wpi.sig.k8s.io/shard-index",
+					"set spec.shardIndex or add annotation wpi.io/shard-index",
 				claim.Name)}
 		}
 	}

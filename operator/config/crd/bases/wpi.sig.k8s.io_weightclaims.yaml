@@ -5,9 +5,9 @@ metadata:
   annotations:
     api-approved.kubernetes.io: https://github.com/kubernetes/kubernetes/pull/123
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: weightclaims.wpi.sig.k8s.io
+  name: weightclaims.wpi.io
 spec:
-  group: wpi.sig.k8s.io
+  group: wpi.io
   names:
     kind: WeightClaim
     listKind: WeightClaimList

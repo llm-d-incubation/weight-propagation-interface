@@ -1,4 +1,4 @@
-apiVersion: wpi.sig.k8s.io/v1alpha1
+apiVersion: wpi.io/v1alpha1
 kind: WeightBuffer
 metadata:
   name: verl-weight-buffer

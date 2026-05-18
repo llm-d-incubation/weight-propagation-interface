@@ -33,7 +33,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	wpisigk8siov1alpha1 "wpi.sig.k8s.io/operator/api/v1alpha1"
+	wpisigk8siov1alpha1 "wpi.io/operator/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 

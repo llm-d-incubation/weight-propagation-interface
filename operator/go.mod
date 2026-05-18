@@ -1,4 +1,4 @@
-module wpi.sig.k8s.io/operator
+module wpi.io/operator
 
 go 1.25.3
 

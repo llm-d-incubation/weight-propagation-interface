@@ -85,7 +85,7 @@ func publishResourceSliceLoop(ctx context.Context, dynClient dynamic.Interface, 
 						"name": rsName,
 					},
 					"spec": map[string]interface{}{
-						"driver":   "wpi.sig.k8s.io",
+						"driver":   "wpi.io",
 						"nodeName": nodeName,
 						"pool": map[string]interface{}{
 							"name":               nodeName,

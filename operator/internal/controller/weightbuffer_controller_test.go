@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	wpisigk8siov1alpha1 "wpi.sig.k8s.io/operator/api/v1alpha1"
+	wpisigk8siov1alpha1 "wpi.io/operator/api/v1alpha1"
 )
 
 var _ = Describe("WeightBuffer Controller", func() {

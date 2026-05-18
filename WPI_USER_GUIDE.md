@@ -30,7 +30,7 @@ A `WeightBuffer` is a cluster-level resource that tells WPI to reserve a block o
 Create a file named `weightbuffer.yaml`:
 
 ```yaml
-apiVersion: wpi.sig.k8s.io/v1alpha1
+apiVersion: wpi.io/v1alpha1
 kind: WeightBuffer
 metadata:
   name: llama-3-8b-weights
@@ -58,7 +58,7 @@ A `WeightClaim` is a namespace-scoped resource similar to a PersistentVolumeClai
 Create a file named `weightclaim.yaml`:
 
 ```yaml
-apiVersion: wpi.sig.k8s.io/v1alpha1
+apiVersion: wpi.io/v1alpha1
 kind: WeightClaim
 metadata:
   name: my-llama-claim
@@ -243,7 +243,7 @@ For models too large to fit on a single GPU (e.g., Kimi K2 at 1T parameters, Lla
 ### 6.1 Create a Sharded WeightBuffer
 
 ```yaml
-apiVersion: wpi.sig.k8s.io/v1alpha1
+apiVersion: wpi.io/v1alpha1
 kind: WeightBuffer
 metadata:
   name: kimi-k2-weights
@@ -277,7 +277,7 @@ kubectl get weightbuffer kimi-k2-weights -o jsonpath='{.status.totalShards}'
 Each GPU worker claims a specific shard:
 
 ```yaml
-apiVersion: wpi.sig.k8s.io/v1alpha1
+apiVersion: wpi.io/v1alpha1
 kind: WeightClaim
 metadata:
   name: kimi-shard-0
@@ -288,7 +288,7 @@ spec:
 ```
 
 **Auto-assignment:** If `shardIndex` is omitted, the operator automatically assigns shards based on pod annotations in this priority order:
-1. `wpi.sig.k8s.io/shard-index` — explicit WPI annotation
+1. `wpi.io/shard-index` — explicit WPI annotation
 2. `batch.kubernetes.io/job-completion-index` — Kubernetes Job index
 3. `ray.io/rank` — Ray worker rank
 

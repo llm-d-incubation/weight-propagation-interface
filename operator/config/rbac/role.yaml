@@ -25,7 +25,7 @@ rules:
   - patch
   - update
 - apiGroups:
-  - wpi.sig.k8s.io
+  - wpi.io
   resources:
   - weightbuffers
   - weightclaims
@@ -38,14 +38,14 @@ rules:
   - update
   - watch
 - apiGroups:
-  - wpi.sig.k8s.io
+  - wpi.io
   resources:
   - weightbuffers/finalizers
   - weightclaims/finalizers
   verbs:
   - update
 - apiGroups:
-  - wpi.sig.k8s.io
+  - wpi.io
   resources:
   - weightbuffers/status
   - weightclaims/status

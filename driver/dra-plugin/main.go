@@ -21,14 +21,14 @@ import (
 	"k8s.io/client-go/rest"
 	drav1 "k8s.io/kubelet/pkg/apis/dra/v1"
 	pluginregv1 "k8s.io/kubelet/pkg/apis/pluginregistration/v1"
-	wpipb "wpi.sig.k8s.io/operator/pkg/wpi"
+	wpipb "wpi.io/operator/pkg/wpi"
 )
 
 const (
-	pluginName     = "wpi.sig.k8s.io"
-	pluginEndpoint = "/var/lib/kubelet/plugins/wpi.sig.k8s.io/dra.sock"
+	pluginName     = "wpi.io"
+	pluginEndpoint = "/var/lib/kubelet/plugins/wpi.io/dra.sock"
 	driverEndpoint = "unix:///run/wpi/sockets/wpi-grpc.sock" // Connection to python wpi-driver
-	registrySocket = "/var/lib/kubelet/plugins_registry/wpi.sig.k8s.io-dra.sock"
+	registrySocket = "/var/lib/kubelet/plugins_registry/wpi.io-dra.sock"
 )
 
 // wpiPlugin implements drav1.DRAPluginServer and pluginregv1.RegistrationServer
@@ -80,8 +80,8 @@ func (p *wpiPlugin) NodePrepareResources(ctx context.Context, req *drav1.NodePre
 		return nil, fmt.Errorf("failed to create dynamic client: %v", err)
 	}
 
-	wcGVR := schema.GroupVersionResource{Group: "wpi.sig.k8s.io", Version: "v1alpha1", Resource: "weightclaims"}
-	wbGVR := schema.GroupVersionResource{Group: "wpi.sig.k8s.io", Version: "v1alpha1", Resource: "weightbuffers"}
+	wcGVR := schema.GroupVersionResource{Group: "wpi.io", Version: "v1alpha1", Resource: "weightclaims"}
+	wbGVR := schema.GroupVersionResource{Group: "wpi.io", Version: "v1alpha1", Resource: "weightbuffers"}
 
 	client := wpipb.NewNodeServiceClient(conn)
 	for _, claim := range req.Claims {

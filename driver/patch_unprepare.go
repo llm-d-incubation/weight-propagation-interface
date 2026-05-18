@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	drav1 "k8s.io/kubelet/pkg/apis/dra/v1"
-	wpipb "wpi.sig.k8s.io/operator/pkg/wpi"
+	wpipb "wpi.io/operator/pkg/wpi"
 )
 
 func (p *wpiPlugin) NodeUnprepareResources(ctx context.Context, req *drav1.NodeUnprepareResourcesRequest) (*drav1.NodeUnprepareResourcesResponse, error) {
