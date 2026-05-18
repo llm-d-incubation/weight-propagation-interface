@@ -10,7 +10,7 @@ kubectl apply -f ../crds/test_wb_sharded.yaml
 # Each shard (0-7) needs to be staged on BOTH nodes
 for i in {0..7}; do
 cat << WC_EOF | kubectl apply -f -
-apiVersion: wpi.sig.k8s.io/v1alpha1
+apiVersion: wpi.io/v1alpha1
 kind: WeightClaim
 metadata:
   name: wc-test-sharded-src-${i}
@@ -20,7 +20,7 @@ spec:
   shardIndex: ${i}
 WC_EOF
 cat << WC_EOF | kubectl apply -f -
-apiVersion: wpi.sig.k8s.io/v1alpha1
+apiVersion: wpi.io/v1alpha1
 kind: WeightClaim
 metadata:
   name: wc-test-sharded-tgt-${i}

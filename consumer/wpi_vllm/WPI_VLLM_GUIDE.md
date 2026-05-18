@@ -11,7 +11,7 @@ The Weight Propagation Interface (WPI) enables high-performance, zero-copy model
 Before you begin, ensure the following are set up in your cluster:
 
 1.  **WPI Driver Deployed**: The `wpi-driver` DaemonSet must be running in the `wpi-system` namespace.
-2.  **CRDs Installed**: Custom Resource Definitions for `WeightBuffer` and `WeightClaim` must be installed with the API group `wpi.sig.k8s.io/v1alpha1`.
+2.  **CRDs Installed**: Custom Resource Definitions for `WeightBuffer` and `WeightClaim` must be installed with the API group `wpi.io/v1alpha1`.
 3.  **Hugging Face Token**: A Kubernetes secret named `hf-token-secret` must be created in the `wpi-system` namespace containing your token:
     ```bash
     kubectl create secret generic hf-token-secret --from-literal=token='<YOUR_HF_TOKEN>' -n wpi-system

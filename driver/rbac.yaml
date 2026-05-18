@@ -9,7 +9,7 @@ kind: ClusterRole
 metadata:
   name: wpi-driver-role
 rules:
-- apiGroups: ["wpi.sig.k8s.io"]
+- apiGroups: ["wpi.io"]
   resources: ["weightclaims", "weightbuffers"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["resource.k8s.io"]

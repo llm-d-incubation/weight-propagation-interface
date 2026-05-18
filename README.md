@@ -67,7 +67,7 @@ WPI delivers near-line-rate weight propagation by eliminating storage overheads 
 Here is a minimal example of a `WeightBuffer` and a `WeightClaim` to bind an inference workload to a shared weight buffer:
 
 ```yaml
-apiVersion: wpi.sig.k8s.io/v1alpha1
+apiVersion: wpi.io/v1alpha1
 kind: WeightBuffer
 metadata:
   name: vllm-weight-buffer
@@ -76,7 +76,7 @@ spec:
   capacity: "75Gi"  # 75 GiB — adjust to your model size
 
 ---
-apiVersion: wpi.sig.k8s.io/v1alpha1
+apiVersion: wpi.io/v1alpha1
 kind: WeightClaim
 metadata:
   name: vllm-weight-claim

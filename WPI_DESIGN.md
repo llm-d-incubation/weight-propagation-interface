@@ -43,7 +43,7 @@ WPI introduces two core custom resources acting as the Control Plane Interface:
         *   `sourceBuffer`: A reference to the underlying `WeightBuffer`.
         *   `propagationPolicy`: Defines caching or locality requirements.
         *   `targetLayout`: Can request reshaping of the tensor layout for the specific consumer.
-        *   `shardIndex` *(optional)*: Which shard this claim requests. If omitted, the operator auto-assigns based on pod annotations (`wpi.sig.k8s.io/shard-index`, `batch.kubernetes.io/job-completion-index`, or `ray.io/rank`).
+        *   `shardIndex` *(optional)*: Which shard this claim requests. If omitted, the operator auto-assigns based on pod annotations (`wpi.io/shard-index`, `batch.kubernetes.io/job-completion-index`, or `ray.io/rank`).
     *   **Status fields (populated by operator):**
         *   `assignedShardIndex`: The resolved shard index for this claim.
 

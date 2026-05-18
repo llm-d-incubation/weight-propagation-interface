@@ -30,7 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
-	wpisigk8siov1alpha1 "wpi.sig.k8s.io/operator/api/v1alpha1"
+	wpisigk8siov1alpha1 "wpi.io/operator/api/v1alpha1"
 )
 
 // WeightBufferReconciler reconciles a WeightBuffer object
@@ -39,9 +39,9 @@ type WeightBufferReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=wpi.sig.k8s.io,resources=weightbuffers,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=wpi.sig.k8s.io,resources=weightbuffers/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=wpi.sig.k8s.io,resources=weightbuffers/finalizers,verbs=update
+// +kubebuilder:rbac:groups=wpi.io,resources=weightbuffers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=wpi.io,resources=weightbuffers/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=wpi.io,resources=weightbuffers/finalizers,verbs=update
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
