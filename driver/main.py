@@ -691,33 +691,61 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
             logger.info(f"Source generated NCCL Unique ID. Connecting to {num_targets} targets (world_size={world_size})...")
             
             sockets = []
-            for i, target_ip in enumerate(target_ips):
-                rank = i + 1
-                logger.info(f"Connecting to target {target_ip} to assign rank {rank}...")
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.connect((target_ip, 50052))
+            
+            # If in SCATTER mode and we have assignments, we create one connection per assignment
+            # to support multiple shards per node.
+            if propagate_mode == 1 and hasattr(request, 'shard_assignments') and request.shard_assignments:
+                assignments = request.shard_assignments
+                world_size = len(assignments) + 1
                 
-                # Build per-target scatter metadata if in SCATTER mode
-                scatter_meta = "0,0"  # offset,length placeholder
-                target_buffer_id = request.buffer_id
-                if propagate_mode == 1 and hasattr(request, 'shard_assignments') and request.shard_assignments:
-                    for assignment in request.shard_assignments:
-                        if assignment.target_node_id == target_ip:
-                            scatter_meta = f"{assignment.offset_bytes},{assignment.length_bytes}"
-                            if "__shard_" in request.buffer_id:
-                                base_id = request.buffer_id.split("__shard_")[0]
-                                target_buffer_id = f"{base_id}__shard_{assignment.shard_index}"
-                            break
+                logger.info(f"Source generated NCCL Unique ID. Connecting to {len(assignments)} assignments (world_size={world_size})...")
                 
-                # Send: buffer_id\nworld_size\nrank\nmode\nscatter_meta\nnccl_id_bytes
-                msg = f"{target_buffer_id}\n{world_size}\n{rank}\n{propagate_mode}\n{scatter_meta}\n".encode('utf-8') + nccl_id_bytes
-                s.sendall(msg)
+                for i, assignment in enumerate(assignments):
+                    rank = i + 1
+                    target_ip = assignment.target_node_id
+                    logger.info(f"Connecting to target {target_ip} for shard {assignment.shard_index} to assign rank {rank}...")
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.connect((target_ip, 50052))
+                    
+                    base_buffer_id = request.buffer_id.split("__shard_")[0]
+                    target_buffer_id = f"{base_buffer_id}__shard_{assignment.shard_index}" if assignment.shard_index >= 0 else request.buffer_id
+                    
+                    scatter_meta = f"{assignment.offset_bytes},{assignment.length_bytes}"
+                    # Send: buffer_id\nworld_size\nrank\nmode\nscatter_meta\nnccl_id_bytes
+                    msg = f"{target_buffer_id}\n{world_size}\n{rank}\n{propagate_mode}\n{scatter_meta}\n".encode('utf-8') + nccl_id_bytes
+                    s.sendall(msg)
+                    
+                    resp = s.recv(1024)
+                    if b"OK" not in resp:
+                        raise Exception(f"Target node {target_ip} rejected NCCL preparation: {resp}")
+                    
+                    sockets.append(s)
+            else:
+                target_ips = request.target_node_ids
+                num_targets = len(target_ips)
+                world_size = num_targets + 1
                 
-                resp = s.recv(1024)
-                if b"OK" not in resp:
-                    raise Exception(f"Target node {target_ip} rejected NCCL preparation: {resp}")
+                logger.info(f"Source generated NCCL Unique ID. Connecting to {num_targets} targets (world_size={world_size})...")
                 
-                sockets.append(s)
+                for i, target_ip in enumerate(target_ips):
+                    rank = i + 1
+                    logger.info(f"Connecting to target {target_ip} to assign rank {rank}...")
+                    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    s.connect((target_ip, 50052))
+                    
+                    # Build per-target scatter metadata if in SCATTER mode (legacy fallback)
+                    scatter_meta = "0,0"
+                    target_buffer_id = request.buffer_id
+                    
+                    # Send: buffer_id\nworld_size\nrank\nmode\nscatter_meta\nnccl_id_bytes
+                    msg = f"{target_buffer_id}\n{world_size}\n{rank}\n{propagate_mode}\n{scatter_meta}\n".encode('utf-8') + nccl_id_bytes
+                    s.sendall(msg)
+                    
+                    resp = s.recv(1024)
+                    if b"OK" not in resp:
+                        raise Exception(f"Target node {target_ip} rejected NCCL preparation: {resp}")
+                    
+                    sockets.append(s)
                 
             logger.info(f"Source (Rank 0) initializing NCCL comm...")
             
@@ -735,16 +763,8 @@ class NodeService(wpi_pb2_grpc.NodeServiceServicer):
                     # SCATTER mode: send different byte ranges to different targets
                     logger.info(f"SCATTER mode: sending {len(request.shard_assignments)} shard assignments...")
                     
-                    # Build rank map: target_node_id -> NCCL rank
-                    rank_map = {}
-                    for i, target_ip in enumerate(target_ips):
-                        rank_map[target_ip] = i + 1
-                    
-                    for assignment in request.shard_assignments:
-                        target_rank = rank_map.get(assignment.target_node_id)
-                        if target_rank is None:
-                            logger.warning(f"Shard assignment target {assignment.target_node_id} not in target list, skipping")
-                            continue
+                    for i, assignment in enumerate(request.shard_assignments):
+                        target_rank = i + 1
                         
                         offset = assignment.offset_bytes
                         length = assignment.length_bytes

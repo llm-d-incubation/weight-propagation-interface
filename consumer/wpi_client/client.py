@@ -359,8 +359,7 @@ class WPIClient:
                     )
 
         # Send GPU metadata so driver knows which GPU to target
-        logger.warning(f"WPI: Forcing GPU=0 instead of requested GPU={gpu_id} to bypass daemon relocation failure")
-        gpu_metadata = "GPU=0\n"
+        gpu_metadata = f"GPU={gpu_id}\n"
         client.sendall(gpu_metadata.encode("utf-8"))
 
         # Receive FD via SCM_RIGHTS

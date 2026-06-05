@@ -230,3 +230,73 @@ Full 8-GPU concurrent transfer: each of the 8 source GPUs sends its 75 GB shard 
 - **NCCL transport:** All streams use `NET/IB/GDRDMA/Shared` — zero-copy GPU-to-GPU over InfiniBand with GPUDirect RDMA, bypassing host memory entirely.
 - **Concurrent bootstrap:** Each shard's NCCL communicator initializes independently in parallel. No serialization locks are needed; the `/dev/shm` volume is sized to 1 GiB to accommodate the shared memory segments required by 8 concurrent NCCL proxy threads.
 
+---
+
+## 9. Sharded Weight Propagation Architecture
+
+To support large-scale distributed workloads (e.g., Tensor Parallelism, Expert Parallelism), WPI implements a highly flexible, decoupled sharded weight propagation architecture.
+
+### 9.1 Decoupled GPU Topology (1-to-N Scatter)
+
+The WPI sharding architecture is designed to decouple the publisher and consumer topologies. Under the hood, WPI operates as a **1-to-N Scatter** model where a single publisher (Trainer Rank 0) acts as the coordinator holding the full, centralized model weights and scatters them directly to N consumer GPUs (e.g. SGLang TP ranks).
+
+This design completely avoids requiring matching node-level GPU densities or symmetric cluster-wide layouts between the trainer and inference groups.
+
+```
+  1-TO-N SCATTER TOPOLOGY (VERIFIED IN PRODUCTION):
+
+  [ Trainer Node A (GPU 0) ]  <--- (Single Publisher holding 8GB full model)
+             │
+             ├───(4GB Shard 0)───> [ Inference Node B (GPU 0 - TP0) ]
+             └───(4GB Shard 1)───> [ Inference Node B (GPU 1 - TP1) ]
+```
+
+*   **Publisher Side**: The Trainer Rank 0 stages a single, global weight buffer representing the full model weights (e.g., 8GB). It does not need to know SGLang's internal GPU layout during staging.
+*   **Consumer Side**: Each consumer worker stages and maps only its respective slice (e.g., SGLang TP0 stages a 4GB shard 0, TP1 stages a 4GB shard 1). This saves substantial VRAM on inference nodes, as they only allocate memory for the partition they actually execute.
+*   **Decoupled Mapping**: During `propagate()`, Trainer Rank 0 defines a list of `ShardAssignment`s mapping byte offsets in its global buffer to target node IPs, shard indexes, and target GPU IDs. 
+
+**Verification Status**: We have successfully validated this **1-to-2 Scatter** layout in our active training run:
+*   **Sender (Publisher)**: A single GPU (GPU 0) on Trainer Node 1 (`10.60.2.63`) holding the full 8GB weight buffer.
+*   **Receivers (Consumers)**: Two separate GPUs (GPU 0 and GPU 1) on SGLang Serving Node (`10.60.3.77`).
+
+Trainer Rank 0's WPI driver successfully initialized a 3-rank cross-node NCCL communicator group and scattered the two 4GB shards concurrently over GKE's network to SGLang's separate GPUs. SGLang TP1 correctly received its shard on GPU 1 without requiring a symmetric 2-to-2 GPU layout.
+
+---
+
+### 9.2 Shard-Scoped Buffer Management
+
+The WPI driver manages sharded buffers by dynamically appending a suffix to the base buffer name:
+```
+<buffer_id>__shard_<shard_index>
+```
+For example, if the base buffer is `slime-weights`, the driver creates `slime-weights__shard_0` and `slime-weights__shard_1`.
+
+*   **Isolation**: Each shard has its own dedicated UNIX domain socket (e.g., `/run/wpi/sockets/slime-weights__shard_0.sock`) and notification socket.
+*   **Transparent Suffixing**: The Python `WPIClient` handles this transparently. When a consumer calls `receive_fd(buffer_id="slime-weights", shard_index=1, total_shards=2)`, the client automatically connects to the correct shard-scoped socket, ensuring workers only receive the file descriptor for their assigned slice.
+
+---
+
+### 9.3 Dynamic NCCL Communicator Grouping
+
+To perform the high-speed cross-node transfer, the WPI driver dynamically orchestrates a single cross-node NCCL communicator group at runtime:
+
+1.  **Topology Discovery**: The publisher's `propagate()` request contains the target IPs and GPU IDs. The driver computes the total communicator size: `1 (publisher) + total_unique_target_gpus`.
+2.  **Point-to-Point Streaming**: Instead of broadcasting the entire buffer to all nodes, the driver executes parallel point-to-point `ncclSend` (on the publisher node) and `ncclRecv` (on the receiver nodes) operations.
+3.  **GPUDirect RDMA**: The data streams directly from the publisher's VRAM over the network fabric (InfiniBand/RoCE/TCP) into the receiver's mapped VRAM shard buffer, bypassing host memory and CPU serialization entirely.
+
+---
+
+### 9.4 Deadlock Prevention via Explicit GPU Routing
+
+In multi-GPU/multi-rank container environments (such as SGLang TP=2), multiple consumer ranks share the same host directory `/run/wpi/sockets`. 
+
+To prevent deadlocks and VRAM relocation overhead, the SCM_RIGHTS file-descriptor passing protocol implements **Explicit GPU Routing**:
+
+1.  **GPU Metadata Exchange**: When a consumer rank connects to the driver's UNIX socket to retrieve its VRAM file descriptor, it first sends a metadata string specifying its target GPU ID:
+    ```
+    GPU=<gpu_id>\n
+    ```
+2.  **Zero-Relocation FD Mapping**: The driver reads this metadata. If SGLang TP1 requests `GPU 1`, the driver immediately binds the FD to the context of GPU 1.
+3.  **Deadlock Prevention**: This ensures the driver never attempts to perform a GPU-to-GPU VRAM relocation (e.g., trying to relocate a buffer staged on GPU 1 to GPU 0), which would block the driver's single-threaded socket listener and deadlock the other TP ranks.
+
+

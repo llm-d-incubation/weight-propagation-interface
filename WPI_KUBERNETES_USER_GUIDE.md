@@ -294,10 +294,10 @@ spec:
 
 ### 6.3 Consumer Code for Sharded Buffers
 
-The `WPIClient` handles shard-scoped buffer IDs transparently:
+The `WPIClient` handles shard-scoped buffer IDs transparently. Each consumer rank discovers and claims its respective shard:
 
 ```python
-from wpi_verl_plugin.client import WPIClient
+from wpi_client.client import WPIClient
 
 client = WPIClient(socket_dir="/run/wpi/sockets")
 
@@ -311,7 +311,7 @@ client.stage_weight(
 )
 
 # FD socket automatically uses shard-scoped name: kimi-k2-weights__shard_0.sock
-fd = client.receive_fd("kimi-k2-weights", shard_index=0, total_shards=8)
+fd = client.receive_fd("kimi-k2-weights", gpu_id=0, shard_index=0, total_shards=8)
 device_ptr = client.import_cuda_memory(fd, size_bytes=268_435_456_000)
 tensor = client.wrap_as_buffer(device_ptr, size_bytes=268_435_456_000)
 
@@ -321,10 +321,13 @@ client.connect_notify_socket("kimi-k2-weights", shard_index=0, total_shards=8)
 
 ### 6.4 Scatter Propagation
 
-For distributing different shards to different nodes, use SCATTER mode:
+For distributing different shards to different nodes, the publisher (trainer) uses `SCATTER` mode to partition the buffer and stream slices directly to target GPUs:
 
 ```python
-from wpi_verl_plugin.proto import wpi_pb2
+from wpi_client.client import WPIClient
+from wpi_client.proto import wpi_pb2
+
+client = WPIClient(socket_dir="/run/wpi/sockets")
 
 # Build shard assignments — each target gets a different byte range
 assignments = [
@@ -347,10 +350,75 @@ assignments = [
 client.propagate(
     buffer_id="kimi-k2-weights",
     target_node_ids=["10.0.0.2", "10.0.0.3"],
-    mode=1,  # SCATTER
+    mode=1,  # 1 = SCATTER
     shard_assignments=assignments,
 )
 ```
 
-In SCATTER mode, the source uses `ncclSend` and each target uses `ncclRecv` to transfer only the assigned byte range. This is significantly more efficient than broadcasting the entire model when each node only needs a partition.
+In `SCATTER` mode, the source WPI driver splits the buffer and uses `ncclSend` to stream only the assigned byte range to each target. Each target node's WPI driver receives its respective slice via `ncclRecv` directly into the mapped VRAM buffer. This is significantly more network-efficient than broadcasting the entire model.
+
+---
+
+## Step 7: Ray Trainer (Publisher) Integration Example
+
+In production RL/SFT pipelines, weight propagation is dynamically orchestrated by a Trainer actor. The trainer stages a single global weight buffer representing the full model weights. At the end of a training step, it packs the updated model parameters into the buffer and propagates them using `SCATTER` mode to the inference nodes.
+
+Below is the standard integration pattern for sharded weight propagation on the publisher (trainer) side in a Ray cluster:
+
+```python
+import torch
+from wpi_client.client import WPIClient
+from wpi_client.proto import wpi_pb2
+
+class MegatronWPIWeightUpdater:
+    def __init__(self, buffer_id="slime-weights", total_bytes=8589934592, num_shards=2):
+        self.client = WPIClient(socket_dir="/run/wpi/sockets")
+        self.buffer_id = buffer_id
+        self.total_bytes = total_bytes
+        self.num_shards = num_shards
+        
+        # Stage the full buffer
+        self.client.stage_weight(
+            buffer_id=self.buffer_id,
+            size_bytes=self.total_bytes,
+            claim_id="megatron-trainer-claim"
+        )
+        
+        # Map VRAM and wrap as a PyTorch tensor
+        self.fd = self.client.receive_fd(self.buffer_id, gpu_id=0)
+        self.device_ptr = self.client.import_cuda_memory(self.fd, self.total_bytes)
+        self.flat_tensor = self.client.wrap_as_buffer(self.device_ptr, self.total_bytes)
+
+    def pack_and_propagate(self, model, target_ips):
+        # 1. Pack model state dict parameters into the flat_tensor
+        offset = 0
+        for name, param in model.named_parameters():
+            numel = param.numel()
+            size = numel * param.element_size()
+            # Copy parameter to the mapped WPI buffer
+            self.flat_tensor[offset:offset+size].copy_(param.data.view(-1))
+            offset += size
+            
+        # 2. Build shard assignments (scatter 4GB to each TP rank)
+        shard_size = self.total_bytes // self.num_shards
+        assignments = []
+        for i, ip in enumerate(target_ips):
+            assignments.append(
+                wpi_pb2.ShardAssignment(
+                    target_node_id=ip,
+                    shard_index=i,
+                    offset_bytes=i * shard_size,
+                    length_bytes=shard_size,
+                    target_gpu_id=i # Stream to the specific TP rank GPU
+                )
+            )
+            
+        # 3. Trigger sharded cross-node NCCL scatter
+        self.client.propagate(
+            buffer_id=self.buffer_id,
+            target_node_ids=target_ips,
+            mode=1, # SCATTER
+            shard_assignments=assignments
+        )
+```
 
