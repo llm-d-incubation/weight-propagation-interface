@@ -25,7 +25,7 @@ The WPI system loads weights directly from shared storage into GPU Memory. For o
 
 ## Step 2: Provision a WeightBuffer (Platform Admin)
 
-A `WeightBuffer` is a cluster-level resource that tells WPI to reserve a block of GPU memory and load a specific set of weights into it.
+A `WeightBuffer` is a namespace-scoped resource that describes a block of GPU memory and a specific set of weights to load into it. Create it in the same namespace as the `WeightClaim` that references it.
 
 Create a file named `weightbuffer.yaml`:
 
@@ -34,12 +34,10 @@ apiVersion: wpi.io/v1alpha1
 kind: WeightBuffer
 metadata:
   name: llama-3-8b-weights
+  namespace: default
 spec:
-  provider: wpi-driver
-  size: "16Gi" # The total size of the required VRAM
+  capacity: "16Gi" # The total size of the required VRAM
   sourcePath: "/mnt/nfs/models/llama-3-8b/model.safetensors"
-  layout: ROW_MAJOR
-  retentionPolicy: Retain # Keep memory allocated even if no pods are using it
 ```
 
 Apply it to the cluster:
@@ -64,8 +62,7 @@ metadata:
   name: my-llama-claim
   namespace: default
 spec:
-  sourceBuffer: llama-3-8b-weights
-  propagationPolicy: LocalHost # Can be Remote, LocalHost, etc.
+  weightBufferName: llama-3-8b-weights
 ```
 
 Apply it to the cluster:
@@ -247,9 +244,9 @@ apiVersion: wpi.io/v1alpha1
 kind: WeightBuffer
 metadata:
   name: kimi-k2-weights
+  namespace: default
 spec:
-  provider: wpi-driver
-  size: "2Ti"  # Total model size
+  capacity: "2Ti"  # Total model size
   sourcePath: "/mnt/nfs/models/kimi-k2/"
   sharding:
     strategy: TensorParallel
@@ -283,7 +280,7 @@ metadata:
   name: kimi-shard-0
   namespace: default
 spec:
-  sourceBuffer: kimi-k2-weights
+  weightBufferName: kimi-k2-weights
   shardIndex: 0  # Explicitly request shard 0
 ```
 
@@ -421,4 +418,3 @@ class MegatronWPIWeightUpdater:
             shard_assignments=assignments
         )
 ```
-
